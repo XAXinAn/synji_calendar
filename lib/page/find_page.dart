@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:provider/provider.dart';
 import '../utils/app_constants.dart';
 import '../utils/ocr_service.dart';
 import '../utils/llm_service.dart';
 import '../models/schedule.dart';
+import '../services/schedule_service.dart';
+import '../services/auth_service.dart';
 import 'ocr_confirm_page.dart';
+import 'login_page.dart';
 
 class FindPage extends StatefulWidget {
   const FindPage({super.key});
@@ -28,42 +32,85 @@ class _FindPageState extends State<FindPage> {
     final List<Map<String, dynamic>> features = [
       {
         'title': 'AI 识图建历',
-        'subtitle': '拍照一键自动提取日程',
-        'color': 0xFFBBDEFB,
-        'icon': Icons.auto_awesome,
-        'image': 'assets/images/image_commit.png',
+        'subtitle': '拍照自动提取日程内容',
+        'color': AppColors.primary,
+        'icon': Icons.camera_enhance_rounded,
+        'tag': '智能',
       },
       {
-        'title': '敬请期待',
-        'subtitle': '更多智能功能开发中',
-        'color': 0xFFC8E6C9,
-        'icon': Icons.more_horiz,
-        'image': 'assets/images/more.png',
+        'title': '语音快速添加',
+        'subtitle': '说话即刻转化为日程',
+        'color': AppColors.success,
+        'icon': Icons.mic_rounded,
+        'tag': '待上线',
+      },
+      {
+        'title': '链接一键识别',
+        'subtitle': '自动识别链接中的会议',
+        'color': AppColors.warning,
+        'icon': Icons.link_rounded,
+        'tag': '规划中',
+      },
+      {
+        'title': '课程表导入',
+        'subtitle': '适配主流大学课表导入',
+        'color': Colors.purple,
+        'icon': Icons.school_rounded,
+        'tag': '规划中',
       },
     ];
 
     return Scaffold(
       backgroundColor: AppColors.background,
-      body: GridView.builder(
-        padding: const EdgeInsets.all(16),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          crossAxisSpacing: 16,
-          mainAxisSpacing: 16,
-          childAspectRatio: 0.8,
-        ),
-        itemCount: features.length,
-        itemBuilder: (context, index) {
-          final feature = features[index];
-          return _buildFeatureCard(context, feature);
-        },
+      body: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '智能探索',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.textMain,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    '利用 AI 技术，让日程管理更简单',
+                    style: TextStyle(fontSize: 13, color: AppColors.textGrey),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          SliverPadding(
+            padding: const EdgeInsets.all(16),
+            sliver: SliverGrid.builder(
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                crossAxisSpacing: 12,
+                mainAxisSpacing: 12,
+                childAspectRatio: 1.1,
+              ),
+              itemCount: features.length,
+              itemBuilder: (context, index) {
+                final feature = features[index];
+                return _buildFeatureCard(context, feature);
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildFeatureCard(BuildContext context, Map<String, dynamic> feature) {
-    final String? imagePath = feature['image'] as String?;
-    final Color themeColor = Color(feature['color'] as int);
+    final Color themeColor = feature['color'] as Color;
+    final bool isAvailable = feature['tag'] == '智能';
 
     return Container(
       decoration: BoxDecoration(
@@ -71,80 +118,124 @@ class _FindPageState extends State<FindPage> {
         borderRadius: BorderRadius.circular(AppSpacings.cardRadius),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
+            color: Colors.black.withOpacity(0.02),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
         ],
       ),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: () {
-          if (feature['title'] == 'AI 识图建历') {
-            _showImagePickerOptions(context);
-          } else {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('${feature['title']} 功能即将上线')),
-            );
-          }
-        },
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              flex: 3,
-              child: Container(
-                width: double.infinity,
-                color: themeColor.withOpacity(0.1),
-                child: imagePath != null
-                    ? Image.asset(
-                        imagePath,
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) => Icon(
-                          feature['icon'] as IconData,
-                          size: 48,
-                          color: themeColor,
-                        ),
-                      )
-                    : Icon(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(AppSpacings.cardRadius),
+          onTap: () {
+            // 拦截：检查是否已登录
+            final authService = context.read<AuthService>();
+            if (!authService.isAuthenticated) {
+              _showLoginPrompt(context);
+              return;
+            }
+
+            if (isAvailable) {
+              _showImagePickerOptions(context);
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('${feature['title']} 正在全力开发中...'),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            }
+          },
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: themeColor.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
                         feature['icon'] as IconData,
-                        size: 48,
+                        size: 24,
                         color: themeColor,
                       ),
-              ),
-            ),
-            Expanded(
-              flex: 2,
-              child: Padding(
-                padding: const EdgeInsets.all(12.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      feature['title'] as String,
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.textMain,
-                      ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      feature['subtitle'] as String,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: AppColors.textGrey,
+                    if (!isAvailable)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: AppColors.textLightGrey.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          feature['tag'],
+                          style: const TextStyle(fontSize: 10, color: AppColors.textGrey),
+                        ),
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
                   ],
                 ),
-              ),
+                const Spacer(),
+                Text(
+                  feature['title'] as String,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.textMain,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  feature['subtitle'] as String,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: AppColors.textGrey,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
             ),
-          ],
+          ),
         ),
+      ),
+    );
+  }
+
+  void _showLoginPrompt(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('需要登录'),
+        content: const Text('智能探索功能需要登录后才能使用，是否立即前往登录？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('再看看', style: TextStyle(color: AppColors.textGrey)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const LoginPage()),
+              );
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            child: const Text('去登录'),
+          ),
+        ],
       ),
     );
   }
@@ -164,28 +255,16 @@ class _FindPageState extends State<FindPage> {
             child: Wrap(
               children: <Widget>[
                 ListTile(
-                  leading: const Icon(Icons.camera_alt, color: AppColors.primary),
-                  title: const Text(
-                    '拍摄照片',
-                    style: TextStyle(
-                      color: AppColors.textMain,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
+                  leading: const Icon(Icons.camera_alt_rounded, color: AppColors.primary),
+                  title: const Text('拍摄照片', style: TextStyle(fontWeight: FontWeight.w500)),
                   onTap: () {
                     Navigator.pop(bContext);
                     _pickImage(context, ImageSource.camera);
                   },
                 ),
                 ListTile(
-                  leading: const Icon(Icons.photo_library, color: AppColors.primary),
-                  title: const Text(
-                    '从相册选择',
-                    style: TextStyle(
-                      color: AppColors.textMain,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
+                  leading: const Icon(Icons.photo_library_rounded, color: AppColors.primary),
+                  title: const Text('从相册选择', style: TextStyle(fontWeight: FontWeight.w500)),
                   onTap: () {
                     Navigator.pop(bContext);
                     _pickImage(context, ImageSource.gallery);
@@ -201,7 +280,8 @@ class _FindPageState extends State<FindPage> {
 
   Future<void> _pickImage(BuildContext context, ImageSource source) async {
     final ImagePicker picker = ImagePicker();
-    final messenger = ScaffoldMessenger.of(context);
+    final scheduleService = context.read<ScheduleService>();
+    final authService = context.read<AuthService>();
     
     try {
       final XFile? image = await picker.pickImage(
@@ -212,19 +292,18 @@ class _FindPageState extends State<FindPage> {
       );
 
       if (image != null) {
-        messenger.showSnackBar(
-          const SnackBar(content: Text('图片已获取，正在提取日程信息...')),
+        scheduleService.setProcessing(true, message: '正在从图片识别内容...', progress: 0.3);
+        final String ocrResult = await _ocrService.processImage(image.path);
+        scheduleService.setProcessing(true, message: 'AI 正在分析日程信息...', progress: 0.7);
+
+        final dynamic llmResult = await _llmService.sendToBot(
+          ocrResult, 
+          token: authService.user?.token
         );
 
-        // 执行 OCR 识别
-        final String ocrResult = await _ocrService.processImage(image.path);
-
-        // 使用 LLMService 进行智能解析
-        final dynamic llmResult = await _llmService.sendToBot(ocrResult);
-
         if (mounted) {
+          scheduleService.setProcessing(false);
           List<Schedule> parsedSchedules = [];
-          
           if (llmResult is List) {
             parsedSchedules = llmResult.map((data) => _mapToSchedule(data)).toList();
           } else if (llmResult is Map<String, dynamic>) {
@@ -233,23 +312,13 @@ class _FindPageState extends State<FindPage> {
             _showResultDialog(context, llmResult.toString());
             return;
           }
-
-          // 跳转到核对页面，不再传递耗时参数
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => OcrConfirmPage(
-                initialSchedules: parsedSchedules,
-              ),
-            ),
-          );
+          Navigator.push(context, MaterialPageRoute(builder: (context) => OcrConfirmPage(initialSchedules: parsedSchedules)));
         }
       }
     } catch (e) {
       if (mounted) {
-        messenger.showSnackBar(
-          SnackBar(content: Text('处理出错: $e')),
-        );
+        scheduleService.setProcessing(false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('处理出错: $e'), backgroundColor: AppColors.error));
       }
     }
   }
@@ -260,11 +329,8 @@ class _FindPageState extends State<FindPage> {
     final String? location = data['location'];
     DateTime dateTime = DateTime.now();
     try {
-      if (data['time'] != null) {
-        dateTime = DateTime.parse(data['time']);
-      }
+      if (data['time'] != null) dateTime = DateTime.parse(data['time']);
     } catch (_) {}
-
     return Schedule(
       id: DateTime.now().millisecondsSinceEpoch.toString() + (data.hashCode.toString()),
       title: title,
@@ -277,19 +343,11 @@ class _FindPageState extends State<FindPage> {
   void _showResultDialog(BuildContext context, String text) {
     showDialog(
       context: context,
-      barrierColor: Colors.black.withOpacity(0.5),
       builder: (context) => AlertDialog(
-        backgroundColor: AppColors.background,
-        surfaceTintColor: Colors.transparent,
-        title: const Text('提示', style: TextStyle(color: AppColors.textMain)),
-        content: SingleChildScrollView(
-          child: Text(text, style: const TextStyle(color: AppColors.textSecondary)),
-        ),
+        title: const Text('提示'),
+        content: SingleChildScrollView(child: Text(text)),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('确定', style: TextStyle(color: AppColors.primary)),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('确定')),
         ],
       ),
     );

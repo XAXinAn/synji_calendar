@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 import 'package:synji_calendar/utils/app_constants.dart';
 import '../services/schedule_service.dart';
+import '../services/auth_service.dart';
 import '../utils/ocr_service.dart';
 import '../utils/llm_service.dart';
 import '../models/schedule.dart';
@@ -81,31 +83,28 @@ class _MainScreenState extends State<MainScreen> {
       _selectedIndex = 0;
     });
 
+    final scheduleService = context.read<ScheduleService>();
+    final authService = context.read<AuthService>();
+
     try {
       final file = File(cleanPath);
       if (!await file.exists()) return;
 
-      ScaffoldMessenger.of(context).clearSnackBars();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Row(
-            children: [
-              SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
-              SizedBox(width: 16),
-              Text('AI 正在识别分享的内容...'),
-            ],
-          ),
-          duration: Duration(seconds: 15),
-        ),
-      );
+      scheduleService.setProcessing(true, message: '正在从图片识别内容...', progress: 0.3);
 
       final String ocrResult = await _ocrService.processImage(cleanPath);
       if (ocrResult.trim().isEmpty) throw "未能识别到图片中的文字";
 
-      final dynamic llmResult = await _llmService.sendToBot(ocrResult);
+      scheduleService.setProcessing(true, message: 'AI 正在分析日程信息...', progress: 0.7);
+
+      // 适配点：传入 Token 供后端代理
+      final dynamic llmResult = await _llmService.sendToBot(
+        ocrResult, 
+        token: authService.user?.token
+      );
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).clearSnackBars();
+      scheduleService.setProcessing(false);
 
       List<Schedule> parsedSchedules = [];
       if (llmResult is List) {
@@ -130,7 +129,7 @@ class _MainScreenState extends State<MainScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).clearSnackBars();
+        scheduleService.setProcessing(false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('处理失败: $e'), backgroundColor: AppColors.error),
         );
@@ -181,15 +180,21 @@ class _MainScreenState extends State<MainScreen> {
               elevation: 4,
               color: Colors.white,
               onSelected: (value) {
-                if (value == 'import') {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('导入功能开发中...')),
-                  );
+                if (value == 'sync') {
+                  final auth = context.read<AuthService>();
+                  final schedule = context.read<ScheduleService>();
+                  if (auth.isAuthenticated) {
+                    schedule.syncWithCloud(auth.user?.token);
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('请先登录后再同步')),
+                    );
+                  }
                 }
               },
               icon: const Icon(Icons.more_vert, color: AppColors.textMain),
               itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-                _buildPopupItem('import', Icons.file_download_outlined, '日历导入'),
+                _buildPopupItem('sync', Icons.cloud_sync_outlined, '云端同步'),
               ],
             ),
             const SizedBox(width: 8),
@@ -265,12 +270,25 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final scheduleService = context.watch<ScheduleService>();
+
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: _buildAppBar(),
-      body: IndexedStack(
-        index: _selectedIndex,
-        children: _pages,
+      body: Stack(
+        children: [
+          IndexedStack(
+            index: _selectedIndex,
+            children: _pages,
+          ),
+          if (scheduleService.isProcessing)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: _buildProcessingBar(scheduleService),
+            ),
+        ],
       ),
       floatingActionButton: _selectedIndex == 0
           ? FloatingActionButton(
@@ -289,6 +307,73 @@ class _MainScreenState extends State<MainScreen> {
             )
           : null,
       bottomNavigationBar: _buildBottomNavigationBar(),
+    );
+  }
+
+  Widget _buildProcessingBar(ScheduleService service) {
+    return Container(
+      margin: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  service.processingMessage,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.textMain,
+                  ),
+                ),
+              ),
+              if (service.processingProgress != null)
+                Text(
+                  '${(service.processingProgress! * 100).toInt()}%',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textGrey,
+                    fontFeatures: [FontFeature.tabularFigures()],
+                  ),
+                ),
+            ],
+          ),
+          if (service.processingProgress != null) ...[
+            const SizedBox(height: 12),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(2),
+              child: LinearProgressIndicator(
+                value: service.processingProgress,
+                backgroundColor: AppColors.primary.withOpacity(0.1),
+                valueColor: const AlwaysStoppedAnimation<Color>(AppColors.primary),
+                minHeight: 4,
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 

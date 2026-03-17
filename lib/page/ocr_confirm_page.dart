@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../models/schedule.dart';
 import '../services/schedule_service.dart';
+import '../services/auth_service.dart'; // 新增
 import '../utils/app_constants.dart';
 import 'add_schedule_page.dart';
 
@@ -34,15 +35,46 @@ class _OcrConfirmPageState extends State<OcrConfirmPage> {
       return;
     }
     
-    final service = context.read<ScheduleService>();
-    for (var s in _schedules) {
-      await service.addSchedule(s);
-    }
-    if (mounted) {
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('成功添加 ${_schedules.length} 条日程')),
-      );
+    final scheduleService = context.read<ScheduleService>();
+    final authService = context.read<AuthService>();
+    
+    try {
+      // 1. 批量存入本地 SQLite
+      for (var s in _schedules) {
+        await scheduleService.addSchedule(s);
+      }
+      
+      if (mounted) {
+        Navigator.pop(context); // 关闭核对页面
+        
+        // 2. 弹出 SnackBar 并提供同步入口
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('已存入本地库 (${_schedules.length} 条)'),
+            behavior: SnackBarBehavior.floating,
+            action: SnackBarAction(
+              label: '立即同步',
+              textColor: AppColors.primaryLight,
+              onPressed: () {
+                // 执行一键同步
+                if (authService.isAuthenticated) {
+                  scheduleService.syncWithCloud(authService.user?.token);
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('请先登录后再同步')),
+                  );
+                }
+              },
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('保存失败: $e'), backgroundColor: AppColors.error),
+        );
+      }
     }
   }
 
@@ -108,8 +140,8 @@ class _OcrConfirmPageState extends State<OcrConfirmPage> {
                       const Icon(Icons.info_outline, size: 14, color: AppColors.textGrey),
                       const SizedBox(width: 4),
                       Text(
-                        '左滑项目可显示删除按钮',
-                        style: TextStyle(fontSize: 12, color: AppColors.textGrey.withOpacity(0.8)),
+                        '确认后日程将存入本机，点击首页右上角可同步云端',
+                        style: TextStyle(fontSize: 11, color: AppColors.textGrey.withOpacity(0.8)),
                       ),
                     ],
                   ),
@@ -234,7 +266,7 @@ class _OcrConfirmPageState extends State<OcrConfirmPage> {
                           elevation: 0,
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                         ),
-                        child: const Text('确认并添加选中的日程', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                        child: const Text('确认并添加至本机', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                       ),
                     ),
                   ),

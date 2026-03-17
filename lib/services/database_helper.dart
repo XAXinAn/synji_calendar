@@ -69,4 +69,10 @@ class DatabaseHelper {
       whereArgs: [id],
     );
   }
+
+  // 新增：清空所有数据（用于同步云端数据时覆盖本地）
+  Future<void> clearAllSchedules() async {
+    Database db = await database;
+    await db.delete('schedules');
+  }
 }
