@@ -129,7 +129,6 @@ class _FindPageState extends State<FindPage> {
         child: InkWell(
           borderRadius: BorderRadius.circular(AppSpacings.cardRadius),
           onTap: () {
-            // 拦截：检查是否已登录
             final authService = context.read<AuthService>();
             if (!authService.isAuthenticated) {
               _showLoginPrompt(context);
@@ -139,10 +138,13 @@ class _FindPageState extends State<FindPage> {
             if (isAvailable) {
               _showImagePickerOptions(context);
             } else {
+              // 优化：使用 Fixed 行为，实现加号避让效果
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
                   content: Text('${feature['title']} 正在全力开发中...'),
-                  behavior: SnackBarBehavior.floating,
+                  behavior: SnackBarBehavior.fixed,
+                  duration: const Duration(seconds: 2),
+                  backgroundColor: const Color(0xFF323232), // 深色背景，符合你截图的风格
                 ),
               );
             }
@@ -305,9 +307,9 @@ class _FindPageState extends State<FindPage> {
           scheduleService.setProcessing(false);
           List<Schedule> parsedSchedules = [];
           if (llmResult is List) {
-            parsedSchedules = llmResult.map((data) => _mapToSchedule(data)).toList();
+            parsedSchedules = llmResult.map((data) => _mapToSchedule(data, 0)).toList();
           } else if (llmResult is Map<String, dynamic>) {
-            parsedSchedules = [_mapToSchedule(llmResult)];
+            parsedSchedules = [_mapToSchedule(llmResult, 0)];
           } else {
             _showResultDialog(context, llmResult.toString());
             return;
@@ -318,25 +320,20 @@ class _FindPageState extends State<FindPage> {
     } catch (e) {
       if (mounted) {
         scheduleService.setProcessing(false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('处理出错: $e'), backgroundColor: AppColors.error));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('处理出错: $e'), backgroundColor: AppColors.error, behavior: SnackBarBehavior.fixed));
       }
     }
   }
 
-  Schedule _mapToSchedule(Map<String, dynamic> data) {
-    final String title = data['title'] ?? '未命名日程';
-    final String? description = data['description'];
-    final String? location = data['location'];
+  Schedule _mapToSchedule(Map<String, dynamic> data, int index) {
     DateTime dateTime = DateTime.now();
-    try {
-      if (data['time'] != null) dateTime = DateTime.parse(data['time']);
-    } catch (_) {}
+    try { if (data['time'] != null) dateTime = DateTime.parse(data['time']); } catch (_) {}
     return Schedule(
-      id: DateTime.now().millisecondsSinceEpoch.toString() + (data.hashCode.toString()),
-      title: title,
-      description: description,
+      id: '${DateTime.now().millisecondsSinceEpoch}_$index',
+      title: data['title'] ?? '未命名日程',
+      description: data['description'],
       dateTime: dateTime,
-      location: location,
+      location: data['location'],
     );
   }
 

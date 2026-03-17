@@ -4,7 +4,6 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../models/schedule.dart';
 import '../services/schedule_service.dart';
-import '../services/auth_service.dart'; // 新增
 import '../utils/app_constants.dart';
 import 'add_schedule_page.dart';
 
@@ -36,43 +35,33 @@ class _OcrConfirmPageState extends State<OcrConfirmPage> {
     }
     
     final scheduleService = context.read<ScheduleService>();
-    final authService = context.read<AuthService>();
     
     try {
-      // 1. 批量存入本地 SQLite
       for (var s in _schedules) {
         await scheduleService.addSchedule(s);
       }
       
       if (mounted) {
-        Navigator.pop(context); // 关闭核对页面
+        Navigator.pop(context); 
         
-        // 2. 弹出 SnackBar 并提供同步入口
+        // 优化：使用 Fixed 行为，移除动作按钮，统一深色风格
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('已存入本地库 (${_schedules.length} 条)'),
-            behavior: SnackBarBehavior.floating,
-            action: SnackBarAction(
-              label: '立即同步',
-              textColor: AppColors.primaryLight,
-              onPressed: () {
-                // 执行一键同步
-                if (authService.isAuthenticated) {
-                  scheduleService.syncWithCloud(authService.user?.token);
-                } else {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('请先登录后再同步')),
-                  );
-                }
-              },
-            ),
+            content: Text('已成功存入本地库 (${_schedules.length} 条)'),
+            behavior: SnackBarBehavior.fixed,
+            duration: const Duration(seconds: 2),
+            backgroundColor: const Color(0xFF323232),
           ),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('保存失败: $e'), backgroundColor: AppColors.error),
+          SnackBar(
+            content: Text('保存失败: $e'), 
+            backgroundColor: AppColors.error,
+            behavior: SnackBarBehavior.fixed,
+          ),
         );
       }
     }
@@ -167,6 +156,8 @@ class _OcrConfirmPageState extends State<OcrConfirmPage> {
                                     SnackBar(
                                       content: Text('已移除: ${s.title}'),
                                       duration: const Duration(seconds: 1),
+                                      behavior: SnackBarBehavior.fixed,
+                                      backgroundColor: const Color(0xFF323232),
                                     ),
                                   );
                                 },

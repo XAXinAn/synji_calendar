@@ -39,7 +39,6 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void initState() {
     super.initState();
-
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initSharingIntent();
     });
@@ -47,20 +46,12 @@ class _MainScreenState extends State<MainScreen> {
 
   void _initSharingIntent() {
     _intentDataStreamSubscription = ReceiveSharingIntent.instance.getMediaStream().listen((List<SharedMediaFile> value) {
-      if (value.isNotEmpty) {
-        _handleSharedImage(value.first.path);
-      }
-    }, onError: (err) {
-      debugPrint("getMediaStream error: $err");
-    });
+      if (value.isNotEmpty) _handleSharedImages(value);
+    }, onError: (err) => debugPrint("getMediaStream error: $err"));
 
     ReceiveSharingIntent.instance.getInitialMedia().then((List<SharedMediaFile> value) {
-      if (value.isNotEmpty) {
-        _handleSharedImage(value.first.path);
-      }
+      if (value.isNotEmpty) _handleSharedImages(value);
       ReceiveSharingIntent.instance.reset();
-    }).catchError((err) {
-      debugPrint("getInitialMedia error: $err");
     });
   }
 
@@ -71,199 +62,102 @@ class _MainScreenState extends State<MainScreen> {
     super.dispose();
   }
 
-  Future<void> _handleSharedImage(String path) async {
-    String cleanPath = path;
-    if (path.startsWith('file://')) {
-      cleanPath = path.replaceFirst('file://', '');
-    }
-
+  Future<void> _handleSharedImages(List<SharedMediaFile> files) async {
     if (!mounted) return;
-
-    setState(() {
-      _selectedIndex = 0;
-    });
+    setState(() => _selectedIndex = 0);
 
     final scheduleService = context.read<ScheduleService>();
     final authService = context.read<AuthService>();
+    List<Schedule> allParsedSchedules = [];
 
     try {
-      final file = File(cleanPath);
-      if (!await file.exists()) return;
+      for (int i = 0; i < files.length; i++) {
+        String path = files[i].path;
+        if (path.startsWith('file://')) path = path.replaceFirst('file://', '');
+        if (!await File(path).exists()) continue;
 
-      scheduleService.setProcessing(true, message: '正在从图片识别内容...', progress: 0.3);
+        double step = 1.0 / files.length;
+        scheduleService.setProcessing(true, message: '正在识别 (${i + 1}/${files.length})...', progress: i * step + (step * 0.3));
+        
+        final String ocrResult = await _ocrService.processImage(path);
+        if (ocrResult.trim().isEmpty) continue;
 
-      final String ocrResult = await _ocrService.processImage(cleanPath);
-      if (ocrResult.trim().isEmpty) throw "未能识别到图片中的文字";
+        scheduleService.setProcessing(true, message: 'AI 解析中 (${i + 1}/${files.length})...', progress: i * step + (step * 0.8));
+        final dynamic llmResult = await _llmService.sendToBot(ocrResult, token: authService.user?.token);
 
-      scheduleService.setProcessing(true, message: 'AI 正在分析日程信息...', progress: 0.7);
-
-      // 适配点：传入 Token 供后端代理
-      final dynamic llmResult = await _llmService.sendToBot(
-        ocrResult, 
-        token: authService.user?.token
-      );
-
-      if (!mounted) return;
-      scheduleService.setProcessing(false);
-
-      List<Schedule> parsedSchedules = [];
-      if (llmResult is List) {
-        parsedSchedules = llmResult.map((data) => _mapToSchedule(data)).toList();
-      } else if (llmResult is Map<String, dynamic>) {
-        parsedSchedules = [_mapToSchedule(llmResult)];
-      } else {
-        throw llmResult.toString();
+        if (llmResult is List) {
+          allParsedSchedules.addAll(llmResult.map((data) => _mapToSchedule(data, i)));
+        } else if (llmResult is Map<String, dynamic>) {
+          allParsedSchedules.add(_mapToSchedule(llmResult, i));
+        }
       }
 
-      if (parsedSchedules.isNotEmpty) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => OcrConfirmPage(
-              initialSchedules: parsedSchedules,
-            ),
-          ),
-        );
-      } else {
-        throw "未能提取到有效的日程";
+      scheduleService.setProcessing(false);
+      if (allParsedSchedules.isNotEmpty && mounted) {
+        Navigator.push(context, MaterialPageRoute(builder: (context) => OcrConfirmPage(initialSchedules: allParsedSchedules)));
       }
     } catch (e) {
       if (mounted) {
         scheduleService.setProcessing(false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('处理失败: $e'), backgroundColor: AppColors.error),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('处理失败: $e'), behavior: SnackBarBehavior.floating));
       }
     }
   }
 
-  Schedule _mapToSchedule(Map<String, dynamic> data) {
-    final String title = data['title'] ?? '分享导入的日程';
-    final String? description = data['description'];
-    final String? location = data['location'];
+  Schedule _mapToSchedule(Map<String, dynamic> data, int index) {
     DateTime dateTime = DateTime.now();
-    try {
-      if (data['time'] != null) {
-        dateTime = DateTime.parse(data['time']);
-      }
-    } catch (_) {}
-
+    try { if (data['time'] != null) dateTime = DateTime.parse(data['time']); } catch (_) {}
     return Schedule(
-      id: DateTime.now().millisecondsSinceEpoch.toString() + (data.hashCode.toString()),
-      title: title,
-      description: description,
+      id: '${DateTime.now().millisecondsSinceEpoch}_$index',
+      title: data['title'] ?? '未命名日程',
+      description: data['description'],
       dateTime: dateTime,
-      location: location,
+      location: data['location'],
     );
   }
 
   void _onItemTapped(int index) {
     if (_selectedIndex == index) return;
-    setState(() {
-      _selectedIndex = index;
-    });
+    setState(() => _selectedIndex = index);
   }
 
   PreferredSizeWidget? _buildAppBar() {
-    switch (_selectedIndex) {
-      case 0:
-        return AppBar(
-          title: _buildSearchBox(),
-          backgroundColor: AppColors.background,
-          elevation: 0,
-          actions: [
-            PopupMenuButton<String>(
-              offset: const Offset(0, 50),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(15),
-              ),
-              elevation: 4,
-              color: Colors.white,
-              onSelected: (value) {
-                if (value == 'sync') {
-                  final auth = context.read<AuthService>();
-                  final schedule = context.read<ScheduleService>();
-                  if (auth.isAuthenticated) {
-                    schedule.syncWithCloud(auth.user?.token);
-                  } else {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('请先登录后再同步')),
-                    );
-                  }
-                }
-              },
-              icon: const Icon(Icons.more_vert, color: AppColors.textMain),
-              itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-                _buildPopupItem('sync', Icons.cloud_sync_outlined, '云端同步'),
-              ],
-            ),
-            const SizedBox(width: 8),
+    if (_selectedIndex != 0 && _selectedIndex != 1) return null;
+    return AppBar(
+      title: _selectedIndex == 0 ? _buildSearchBox() : const Text('功能广场'),
+      backgroundColor: AppColors.background,
+      elevation: 0,
+      actions: _selectedIndex == 0 ? [
+        PopupMenuButton<String>(
+          offset: const Offset(0, 50),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+          onSelected: (value) {
+            if (value == 'sync') {
+              final auth = context.read<AuthService>();
+              if (auth.isAuthenticated) {
+                context.read<ScheduleService>().syncWithCloud(auth.user?.token);
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请先登录'), behavior: SnackBarBehavior.floating));
+              }
+            }
+          },
+          icon: const Icon(Icons.more_vert, color: AppColors.textMain),
+          itemBuilder: (context) => [
+            const PopupMenuItem(value: 'sync', child: Row(children: [Icon(Icons.cloud_sync_outlined, size: 20), SizedBox(width: 12), Text('云端同步')])),
           ],
-        );
-      case 1:
-        return AppBar(
-          title: const Text('功能广场'),
-          backgroundColor: AppColors.background,
-          elevation: 0,
-        );
-      default:
-        return null;
-    }
-  }
-
-  PopupMenuItem<String> _buildPopupItem(String value, IconData icon, String title) {
-    return PopupMenuItem<String>(
-      value: value,
-      height: 45,
-      child: Row(
-        children: [
-          Icon(icon, size: 20, color: AppColors.textSecondary),
-          const SizedBox(width: 12),
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 14,
-              color: AppColors.textMain,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ],
-      ),
+        ),
+        const SizedBox(width: 8),
+      ] : null,
     );
   }
 
   Widget _buildSearchBox() {
     return GestureDetector(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (context) => const SearchPage()),
-        );
-      },
+      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const SearchPage())),
       child: Container(
         height: 40,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.02),
-              blurRadius: 4,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: const Row(
-          children: [
-            SizedBox(width: 12),
-            Icon(Icons.search, size: 20, color: AppColors.textGrey),
-            SizedBox(width: 8),
-            Text(
-              '搜索标题、描述或地点',
-              style: TextStyle(fontSize: 14, color: AppColors.textGrey),
-            ),
-          ],
-        ),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
+        child: const Row(children: [SizedBox(width: 12), Icon(Icons.search, size: 20, color: AppColors.textGrey), SizedBox(width: 8), Text('搜索日程', style: TextStyle(fontSize: 14, color: AppColors.textGrey))]),
       ),
     );
   }
@@ -277,100 +171,48 @@ class _MainScreenState extends State<MainScreen> {
       appBar: _buildAppBar(),
       body: Stack(
         children: [
-          IndexedStack(
-            index: _selectedIndex,
-            children: _pages,
-          ),
+          IndexedStack(index: _selectedIndex, children: _pages),
           if (scheduleService.isProcessing)
             Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
+              left: 16,
+              right: 16,
+              top: 8, // 置顶显示在搜索框下方
               child: _buildProcessingBar(scheduleService),
             ),
         ],
       ),
-      floatingActionButton: _selectedIndex == 0
-          ? FloatingActionButton(
-              onPressed: () {
-                final selectedDate = context.read<ScheduleService>().selectedDate;
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => AddSchedulePage(initialDate: selectedDate),
-                  ),
-                );
-              },
-              backgroundColor: AppColors.primary,
-              elevation: 2,
-              child: const Icon(Icons.add, color: Colors.white),
-            )
-          : null,
+      floatingActionButton: _selectedIndex == 0 ? FloatingActionButton(
+        onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => AddSchedulePage(initialDate: context.read<ScheduleService>().selectedDate))),
+        backgroundColor: AppColors.primary,
+        elevation: 2,
+        child: const Icon(Icons.add, color: Colors.white),
+      ) : null,
       bottomNavigationBar: _buildBottomNavigationBar(),
     );
   }
 
   Widget _buildProcessingBar(ScheduleService service) {
     return Container(
-      margin: const EdgeInsets.all(16),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 10, offset: const Offset(0, 4))],
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Row(
             children: [
-              const SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
-                ),
-              ),
+              const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary))),
               const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  service.processingMessage,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: AppColors.textMain,
-                  ),
-                ),
-              ),
-              if (service.processingProgress != null)
-                Text(
-                  '${(service.processingProgress! * 100).toInt()}%',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: AppColors.textGrey,
-                    fontFeatures: [FontFeature.tabularFigures()],
-                  ),
-                ),
+              Expanded(child: Text(service.processingMessage, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500))),
+              if (service.processingProgress != null) Text('${(service.processingProgress! * 100).toInt()}%', style: const TextStyle(fontSize: 11, color: AppColors.textGrey)),
             ],
           ),
           if (service.processingProgress != null) ...[
-            const SizedBox(height: 12),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(2),
-              child: LinearProgressIndicator(
-                value: service.processingProgress,
-                backgroundColor: AppColors.primary.withOpacity(0.1),
-                valueColor: const AlwaysStoppedAnimation<Color>(AppColors.primary),
-                minHeight: 4,
-              ),
-            ),
+            const SizedBox(height: 10),
+            ClipRRect(borderRadius: BorderRadius.circular(2), child: LinearProgressIndicator(value: service.processingProgress, backgroundColor: AppColors.primary.withOpacity(0.1), minHeight: 3)),
           ],
         ],
       ),
@@ -378,43 +220,18 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Widget _buildBottomNavigationBar() {
-    return Container(
-      decoration: BoxDecoration(
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-          ),
-        ],
-      ),
-      child: BottomNavigationBar(
-        elevation: 0,
-        backgroundColor: AppColors.cardBackground,
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.home_outlined),
-            activeIcon: Icon(Icons.home),
-            label: '首页',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.explore_outlined),
-            activeIcon: Icon(Icons.explore),
-            label: '发现',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.person_outline),
-            activeIcon: Icon(Icons.person),
-            label: '我的',
-          ),
-        ],
-        currentIndex: _selectedIndex,
-        selectedItemColor: AppColors.primary,
-        unselectedItemColor: AppColors.textGrey,
-        type: BottomNavigationBarType.fixed,
-        onTap: _onItemTapped,
-        selectedLabelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-        unselectedLabelStyle: const TextStyle(fontSize: 12),
-      ),
+    return BottomNavigationBar(
+      backgroundColor: AppColors.cardBackground,
+      items: const [
+        BottomNavigationBarItem(icon: Icon(Icons.home_outlined), activeIcon: Icon(Icons.home), label: '首页'),
+        BottomNavigationBarItem(icon: Icon(Icons.explore_outlined), activeIcon: Icon(Icons.explore), label: '发现'),
+        BottomNavigationBarItem(icon: Icon(Icons.person_outline), activeIcon: Icon(Icons.person), label: '我的'),
+      ],
+      currentIndex: _selectedIndex,
+      selectedItemColor: AppColors.primary,
+      unselectedItemColor: AppColors.textGrey,
+      type: BottomNavigationBarType.fixed,
+      onTap: _onItemTapped,
     );
   }
 }
