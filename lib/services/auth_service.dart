@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
+import '../utils/app_constants.dart';
 
 class AuthService extends ChangeNotifier {
   User? _user;
@@ -20,7 +21,7 @@ class AuthService extends ChangeNotifier {
 
   void _initDio() {
     _dio = Dio(BaseOptions(
-      baseUrl: 'http://localhost:8080/v1', 
+      baseUrl: AppConfig.baseUrl, 
       connectTimeout: const Duration(seconds: 5),
       receiveTimeout: const Duration(seconds: 3),
       contentType: 'application/json',
@@ -129,7 +130,7 @@ class AuthService extends ChangeNotifier {
         throw Exception(response.data['message'] ?? '登录失败');
       }
     } on DioException catch (e) {
-      throw Exception(e.response?.data?['message'] ?? '本地服务器连接异常');
+      throw Exception(e.response?.data?['message'] ?? '服务器连接异常');
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -152,7 +153,7 @@ class AuthService extends ChangeNotifier {
         throw Exception(response.data['message'] ?? '注册失败');
       }
     } on DioException catch (e) {
-      throw Exception(e.response?.data?['message'] ?? '本地注册失败');
+      throw Exception(e.response?.data?['message'] ?? '注册失败');
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -177,7 +178,7 @@ class AuthService extends ChangeNotifier {
         }
       }
     } catch (e) {
-      debugPrint('本地 Token 刷新异常: $e');
+      debugPrint('Token 刷新异常: $e');
     }
     return false;
   }

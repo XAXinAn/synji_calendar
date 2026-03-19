@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 import 'package:synji_calendar/utils/app_constants.dart';
 import '../services/schedule_service.dart';
@@ -16,6 +18,7 @@ import 'profile_page.dart';
 import 'add_schedule_page.dart';
 import 'search_page.dart';
 import 'ocr_confirm_page.dart';
+import 'privacy_policy_page.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -40,8 +43,96 @@ class _MainScreenState extends State<MainScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkPrivacyPolicy();
       _initSharingIntent();
     });
+  }
+
+  Future<void> _checkPrivacyPolicy() async {
+    final prefs = await SharedPreferences.getInstance();
+    final bool hasAgreed = prefs.getBool('privacy_policy_agreed') ?? false;
+    
+    if (!hasAgreed && mounted) {
+      _showPrivacyDialog();
+    }
+  }
+
+  void _showPrivacyDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => WillPopScope(
+        onWillPop: () async => false,
+        child: AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Center(
+            child: Text(
+              '温馨提示',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+            ),
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                RichText(
+                  text: TextSpan(
+                    style: const TextStyle(color: AppColors.textMain, fontSize: 14, height: 1.6),
+                    children: [
+                      const TextSpan(text: '欢迎您使用讯极日历！我们非常重视您的个人信息和隐私保护。在您使用服务之前，请仔细阅读'),
+                      TextSpan(
+                        text: '《隐私政策》',
+                        style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold),
+                        recognizer: TapGestureRecognizer()
+                          ..onTap = () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (context) => const PrivacyPolicyPage()),
+                            );
+                          },
+                      ),
+                      const TextSpan(text: '。我们将按照您的授权来处理您的信息，为您提供日程同步、AI解析等服务。\n\n'),
+                      const TextSpan(text: '1. 为了更好的向您提供注册认证、发布信息等功能，我们会收集、使用必要的信息；\n'),
+                      const TextSpan(text: '2. 基于您的授权我们可能会获取您的相机、相册等权限。'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          actions: [
+            Column(
+              children: [
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.setBool('privacy_policy_agreed', true);
+                      Navigator.pop(context);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                    ),
+                    child: const Text('同意并进入', style: TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: () => exit(0),
+                  child: const Text('不同意并退出', style: TextStyle(color: AppColors.textGrey)),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _initSharingIntent() {

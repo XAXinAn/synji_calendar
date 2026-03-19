@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:logger/logger.dart';
 import '../models/schedule.dart';
+import '../utils/app_constants.dart';
 import 'database_helper.dart';
 
 class ScheduleService extends ChangeNotifier {
@@ -30,7 +31,7 @@ class ScheduleService extends ChangeNotifier {
 
   void _initDio() {
     _dio = Dio(BaseOptions(
-      baseUrl: 'http://localhost:8080/v1',
+      baseUrl: AppConfig.baseUrl,
       connectTimeout: const Duration(seconds: 5),
       receiveTimeout: const Duration(seconds: 3),
       contentType: 'application/json',

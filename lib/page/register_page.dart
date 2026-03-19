@@ -1,7 +1,9 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
 import '../utils/app_constants.dart';
+import 'privacy_policy_page.dart';
 
 class RegisterPage extends StatefulWidget {
   const RegisterPage({super.key});
@@ -17,6 +19,7 @@ class _RegisterPageState extends State<RegisterPage> {
   final _confirmPasswordController = TextEditingController();
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
+  bool _agreeToPrivacy = false;
 
   @override
   void dispose() {
@@ -26,7 +29,21 @@ class _RegisterPageState extends State<RegisterPage> {
     super.dispose();
   }
 
+  void _showPrivacyPolicy() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const PrivacyPolicyPage()),
+    );
+  }
+
   void _handleRegister() async {
+    if (!_agreeToPrivacy) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先勾选同意隐私协议'), backgroundColor: AppColors.warning),
+      );
+      return;
+    }
+
     if (_formKey.currentState!.validate()) {
       final authService = context.read<AuthService>();
       try {
@@ -35,7 +52,6 @@ class _RegisterPageState extends State<RegisterPage> {
           _passwordController.text,
         );
         if (success && mounted) {
-          // 注册并登录成功后，返回到主界面
           Navigator.of(context).popUntil((route) => route.isFirst);
         }
       } catch (e) {
@@ -121,7 +137,34 @@ class _RegisterPageState extends State<RegisterPage> {
                 ],
               ),
             ),
-            const SizedBox(height: 40),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Checkbox(
+                  value: _agreeToPrivacy,
+                  onChanged: (value) => setState(() => _agreeToPrivacy = value ?? false),
+                  activeColor: AppColors.primary,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                ),
+                Expanded(
+                  child: RichText(
+                    text: TextSpan(
+                      style: const TextStyle(fontSize: 12, color: AppColors.textGrey),
+                      children: [
+                        const TextSpan(text: '我已阅读并同意'),
+                        TextSpan(
+                          text: '《隐私协议》',
+                          style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold),
+                          recognizer: TapGestureRecognizer()..onTap = _showPrivacyPolicy,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 32),
             SizedBox(
               width: double.infinity,
               height: 52,

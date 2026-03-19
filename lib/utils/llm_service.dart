@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:intl/intl.dart';
+import 'app_constants.dart';
 
 /// 日程解析 LLM 服务 (后端代理版)
 /// 出于安全性考虑，所有 LLM 调用均通过后端转发，不在前端暴露 API Key
@@ -10,7 +11,7 @@ class LLMService {
   LLMService() {
     _dio = Dio(BaseOptions(
       // 统一指向后端 Base URL
-      baseUrl: 'http://localhost:8080/v1',
+      baseUrl: AppConfig.baseUrl,
       connectTimeout: const Duration(seconds: 10),
       receiveTimeout: const Duration(seconds: 20),
       contentType: 'application/json',

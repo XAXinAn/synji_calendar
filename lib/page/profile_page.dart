@@ -2,11 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:synji_calendar/utils/app_constants.dart';
 import '../services/auth_service.dart';
-import '../services/schedule_service.dart';
 import 'login_page.dart';
 import 'membership_page.dart';
 import 'cloud_management_page.dart';
-import 'edit_profile_page.dart'; // 新增
+import 'edit_profile_page.dart';
+import 'privacy_policy_page.dart';
 
 class ProfilePage extends StatelessWidget {
   const ProfilePage({super.key});
@@ -77,7 +77,34 @@ class ProfilePage extends StatelessWidget {
             const SizedBox(height: 16),
           ],
           
-          // 4. 账号操作
+          // 4. 设置与协议
+          _buildSectionCard([
+            _MenuItem(
+              icon: Icons.security_outlined,
+              title: '隐私政策',
+              iconColor: Colors.blueGrey,
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const PrivacyPolicyPage()),
+                );
+              },
+            ),
+            const Divider(height: 1, indent: 56, color: AppColors.divider),
+            if (authService.isAuthenticated)
+              _MenuItem(
+                icon: Icons.person_off_outlined,
+                title: '注销账号',
+                iconColor: Colors.orange,
+                onTap: () {
+                  _showDeleteAccountConfirm(context);
+                },
+              ),
+          ]),
+
+          const SizedBox(height: 16),
+
+          // 5. 账号操作
           if (authService.isAuthenticated)
             _buildSectionCard([
               _MenuItem(
@@ -144,6 +171,33 @@ class ProfilePage extends StatelessWidget {
               Navigator.pop(context);
             },
             child: const Text('确定', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showDeleteAccountConfirm(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('注销账号', style: TextStyle(color: Colors.red)),
+        content: const Text('注销账号将永久删除您的所有数据且无法恢复。确定要注销吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消', style: TextStyle(color: AppColors.textGrey)),
+          ),
+          TextButton(
+            onPressed: () {
+              // 这里可以调用后端的注销接口，目前先执行退出登录逻辑并提示
+              context.read<AuthService>().logout();
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('账号注销成功')),
+              );
+            },
+            child: const Text('确定注销', style: TextStyle(color: Colors.red)),
           ),
         ],
       ),
