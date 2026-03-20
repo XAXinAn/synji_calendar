@@ -1,5 +1,7 @@
 import 'dart:convert';
 import 'package:dio/dio.dart';
+import 'package:dio_cookie_manager/dio_cookie_manager.dart';
+import 'package:cookie_jar/cookie_jar.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
@@ -9,12 +11,14 @@ class AuthService extends ChangeNotifier {
   User? _user;
   bool _isLoading = false;
   late final Dio _dio;
+  late final CookieJar _cookieJar;
 
   User? get user => _user;
   bool get isLoading => _isLoading;
   bool get isAuthenticated => _user != null;
 
   AuthService() {
+    _cookieJar = CookieJar();
     _initDio();
     _loadUser();
   }
@@ -27,16 +31,21 @@ class AuthService extends ChangeNotifier {
       contentType: 'application/json',
     ));
 
+    // 添加 Cookie 管理器，处理后端 HttpOnly 的 refreshToken
+    _dio.interceptors.add(CookieManager(_cookieJar));
+
     _dio.interceptors.add(InterceptorsWrapper(
       onRequest: (options, handler) {
-        if (_user?.token != null) {
+        if (_user?.token != null && _user!.token.isNotEmpty) {
           options.headers['Authorization'] = 'Bearer ${_user!.token}';
         }
         return handler.next(options);
       },
       onError: (DioException e, handler) async {
+        // 401 且有用户登录态时尝试刷新 Token
         if (e.response?.statusCode == 401 && _user != null) {
           try {
+            // 注意：/auth/refresh 不需要手动带 Token，它通过 Cookie 带 refreshToken
             final success = await _refreshToken();
             if (success) {
               final opts = e.requestOptions;
@@ -47,14 +56,14 @@ class AuthService extends ChangeNotifier {
           } catch (refreshError) {
             debugPrint('Token 刷新失败: $refreshError');
           }
-          logout();
+          logout(); // 刷新失败则强制退出
         }
         return handler.next(e);
       },
     ));
   }
 
-  // 更新个人资料接口
+  // 更新个人资料
   Future<bool> updateProfile({required String nickname}) async {
     if (_user == null) return false;
     
@@ -64,7 +73,6 @@ class AuthService extends ChangeNotifier {
       });
 
       if (response.data['code'] == 200) {
-        // 更新本地内存中的用户对象，同时保留原有的 token
         _user = User(
           id: _user!.id,
           username: _user!.username,
@@ -101,12 +109,13 @@ class AuthService extends ChangeNotifier {
     try {
       final response = await _dio.get('/auth/me');
       if (response.data['code'] == 200) {
-        final token = _user!.token;
+        final currentToken = _user!.token;
+        // 使用后端返回的数据更新，但保留当前的有效 Token
         _user = User.fromJson({
           ...response.data['data'],
-          'token': token,
+          'token': currentToken,
         });
-        _saveUserToPrefs();
+        await _saveUserToPrefs();
         notifyListeners();
       }
     } catch (e) {
@@ -146,8 +155,11 @@ class AuthService extends ChangeNotifier {
         'password': password,
       });
       if (response.data['code'] == 200 || response.data['code'] == 201) {
-        _user = User.fromJson(response.data['data']);
-        await _saveUserToPrefs();
+        if (response.data['data'] != null && 
+           (response.data['data']['token'] != null || response.data['data']['accessToken'] != null)) {
+          _user = User.fromJson(response.data['data']);
+          await _saveUserToPrefs();
+        }
         return true;
       } else {
         throw Exception(response.data['message'] ?? '注册失败');
@@ -162,9 +174,9 @@ class AuthService extends ChangeNotifier {
 
   Future<bool> _refreshToken() async {
     try {
+      // POST /auth/refresh，鉴权：否（通过 refreshToken Cookie）
       final response = await _dio.post('/auth/refresh');
       if (response.data['code'] == 200) {
-        // 兼容取值逻辑：支持 token 或 accessToken 字段
         final newToken = response.data['data']['token'] ?? response.data['data']['accessToken'];
         if (newToken != null) {
           _user = User(
@@ -186,12 +198,40 @@ class AuthService extends ChangeNotifier {
   Future<void> logout() async {
     try {
       if (_user != null) await _dio.post('/auth/logout');
+    } catch (e) {
+      debugPrint('登出请求异常 (正常流程继续): $e');
     } finally {
       _user = null;
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('user_data');
+      _cookieJar.deleteAll(); // 清空 Cookie
       notifyListeners();
     }
+  }
+
+  // 彻底注销账号
+  Future<bool> deleteAccount() async {
+    if (_user == null) return false;
+    _isLoading = true;
+    notifyListeners();
+    
+    try {
+      final response = await _dio.delete('/auth/me');
+      if (response.data['code'] == 200) {
+        _user = null;
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove('user_data');
+        _cookieJar.deleteAll();
+        return true;
+      }
+    } on DioException catch (e) {
+      debugPrint('注销账号失败: ${e.message}');
+      rethrow;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+    return false;
   }
 
   Future<void> _saveUserToPrefs() async {

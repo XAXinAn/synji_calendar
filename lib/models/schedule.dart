@@ -4,6 +4,8 @@ class Schedule {
   final String? description;
   final DateTime dateTime;
   final String? location;
+  final String? groupId;      // 小组ID，为空表示个人日程
+  final String? creatorName;  // 创建者昵称
 
   Schedule({
     required this.id,
@@ -11,6 +13,8 @@ class Schedule {
     this.description,
     required this.dateTime,
     this.location,
+    this.groupId,
+    this.creatorName,
   });
 
   Map<String, dynamic> toMap() {
@@ -20,6 +24,8 @@ class Schedule {
       'description': description,
       'dateTime': dateTime.toIso8601String(),
       'location': location,
+      'groupId': groupId,
+      'creatorName': creatorName,
     };
   }
 
@@ -30,6 +36,8 @@ class Schedule {
       description: map['description'] as String?,
       dateTime: DateTime.parse(map['dateTime'] as String),
       location: map['location'] as String?,
+      groupId: map['groupId'] as String?,
+      creatorName: map['creatorName'] as String?,
     );
   }
 
@@ -39,6 +47,8 @@ class Schedule {
     String? description,
     DateTime? dateTime,
     String? location,
+    String? groupId,
+    String? creatorName,
   }) {
     return Schedule(
       id: id ?? this.id,
@@ -46,6 +56,8 @@ class Schedule {
       description: description ?? this.description,
       dateTime: dateTime ?? this.dateTime,
       location: location ?? this.location,
+      groupId: groupId ?? this.groupId,
+      creatorName: creatorName ?? this.creatorName,
     );
   }
 }

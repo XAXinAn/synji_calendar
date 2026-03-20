@@ -38,7 +38,7 @@ class ScheduleService extends ChangeNotifier {
     ));
   }
 
-  // 1. 获取云端列表 (仅用于预览管理)
+  // 1. 获取云端列表 (仅个人日程)
   Future<List<Schedule>> fetchCloudSchedules(String? token) async {
     if (token == null) return [];
     try {
@@ -54,7 +54,7 @@ class ScheduleService extends ChangeNotifier {
     return [];
   }
 
-  // 2. 删除单个云端记录 (不影响本地)
+  // 2. 删除个人云端记录
   Future<bool> deleteSingleCloudSchedule(String? token, String id) async {
     if (token == null) return false;
     try {
@@ -67,32 +67,33 @@ class ScheduleService extends ChangeNotifier {
     }
   }
 
-  // 3. 核心同步逻辑 (镜像上传 + 增量下载)
+  // 3. 核心同步逻辑 (仅针对个人日程)
   Future<void> syncWithCloud(String? token) async {
     if (token == null) return;
     
-    setProcessing(true, message: '正在同步云端数据...');
+    setProcessing(true, message: '正在同步个人云端数据...');
     try {
       _dio.options.headers['Authorization'] = 'Bearer $token';
 
-      // 【上传】以本地为准，更新云端镜像
+      // 【上传】仅上传本地个人日程
       final localSchedules = await _dbHelper.getSchedules();
-      await _dio.post('/schedules/sync', data: localSchedules.map((e) => e.toMap()).toList());
+      final personalSchedules = localSchedules.where((s) => s.groupId == null || s.groupId!.isEmpty).toList();
+      await _dio.post('/schedules/sync', data: personalSchedules.map((e) => e.toMap()).toList());
 
-      // 【拉取】获取云端可能存在的、由其他设备同步的数据
+      // 【拉取】仅拉取个人日程
       final response = await _dio.get('/schedules');
       if (response.data['code'] == 200) {
         final List<dynamic> remoteData = response.data['data'];
         final remoteSchedules = remoteData.map((e) => Schedule.fromMap(e)).toList();
-
-        // 【安全合并】不再清空本地，而是采用 insert/update 覆盖模式
-        // 这样如果云端被清空，本地数据依然存在
+        
+        // 核心改动：同步前先清理本地个人日程，防止重复
+        // 或者使用 insert (replace 模式)
         for (var s in remoteSchedules) {
           await _dbHelper.insertSchedule(s);
         }
-        
-        await loadSchedules();
       }
+      
+      await loadSchedules();
       setProcessing(false);
     } catch (e) {
       _logger.e('同步失败: $e');
@@ -100,7 +101,7 @@ class ScheduleService extends ChangeNotifier {
     }
   }
 
-  // 4. 清空云端备份 (绝不影响本地)
+  // 4. 清空云端备份
   Future<bool> clearCloudSchedules(String? token) async {
     if (token == null) return false;
     
@@ -131,9 +132,10 @@ class ScheduleService extends ChangeNotifier {
 
   Future<void> loadSchedules() async {
     try {
+      // 核心改动：loadSchedules 仅加载本地个人日程
       final data = await _dbHelper.getSchedules();
       _schedules.clear();
-      _schedules.addAll(data);
+      _schedules.addAll(data.where((s) => s.groupId == null || s.groupId!.isEmpty));
       _sortSchedules();
       notifyListeners();
     } catch (e) {
@@ -145,42 +147,77 @@ class ScheduleService extends ChangeNotifier {
     _schedules.sort((a, b) => a.dateTime.compareTo(b.dateTime));
   }
 
-  Future<void> addSchedule(Schedule schedule) async {
+  // 修改：addSchedule 区分个人和小组
+  Future<void> addSchedule(Schedule schedule, {String? token}) async {
     try {
-      await _dbHelper.insertSchedule(schedule);
-      _schedules.add(schedule);
-      _sortSchedules();
-      notifyListeners();
+      if (schedule.groupId == null || schedule.groupId!.isEmpty) {
+        // 个人日程：本地优先
+        await _dbHelper.insertSchedule(schedule);
+        _schedules.add(schedule);
+        _sortSchedules();
+        notifyListeners();
+      } else {
+        // 小组日程：纯云端，不存本地库
+        if (token != null) {
+          _dio.options.headers['Authorization'] = 'Bearer $token';
+          await _dio.post('/groups/${schedule.groupId}/schedules', data: schedule.toMap());
+        } else {
+          throw Exception('登录已过期，无法发布小组日程');
+        }
+      }
     } catch (e) {
       _logger.e('Failed to add schedule: $e');
+      rethrow;
     }
   }
 
-  Future<void> updateSchedule(Schedule updatedSchedule) async {
+  // 修改：updateSchedule 区分个人和小组
+  Future<void> updateSchedule(Schedule updatedSchedule, {String? token}) async {
     try {
-      await _dbHelper.updateSchedule(updatedSchedule);
-      final index = _schedules.indexWhere((s) => s.id == updatedSchedule.id);
-      if (index != -1) {
-        _schedules[index] = updatedSchedule;
-        _sortSchedules();
-        notifyListeners();
+      if (updatedSchedule.groupId == null || updatedSchedule.groupId!.isEmpty) {
+        // 个人日程：更新本地
+        await _dbHelper.updateSchedule(updatedSchedule);
+        final index = _schedules.indexWhere((s) => s.id == updatedSchedule.id);
+        if (index != -1) {
+          _schedules[index] = updatedSchedule;
+          _sortSchedules();
+          notifyListeners();
+        }
+      } else {
+        // 小组日程：仅同步云端
+        if (token != null) {
+          _dio.options.headers['Authorization'] = 'Bearer $token';
+          await _dio.post('/groups/${updatedSchedule.groupId}/schedules', data: updatedSchedule.toMap());
+        }
       }
     } catch (e) {
       _logger.e('Failed to update schedule: $e');
+      rethrow;
     }
   }
 
-  Future<void> removeSchedule(String id) async {
+  // 修改：removeSchedule 区分个人和小组
+  Future<void> removeSchedule(String id, {String? token, String? groupId}) async {
     try {
-      await _dbHelper.deleteSchedule(id);
-      _schedules.removeWhere((s) => s.id == id);
-      notifyListeners();
+      if (groupId == null || groupId.isEmpty) {
+        // 个人日程：本地删除
+        await _dbHelper.deleteSchedule(id);
+        _schedules.removeWhere((s) => s.id == id);
+        notifyListeners();
+      } else {
+        // 小组日程：云端删除
+        if (token != null) {
+          _dio.options.headers['Authorization'] = 'Bearer $token';
+          await _dio.delete('/groups/$groupId/schedules/$id');
+        }
+      }
     } catch (e) {
       _logger.e('Failed to remove schedule: $e');
     }
   }
 
   List<Schedule> getSchedulesForDay(DateTime day) {
+    // 这里仅返回个人日程
     return _schedules.where((s) {
       return s.dateTime.year == day.year &&
           s.dateTime.month == day.month &&

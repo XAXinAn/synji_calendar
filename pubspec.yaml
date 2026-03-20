@@ -24,8 +24,11 @@ dependencies:
   image_picker: ^1.1.2
   google_mlkit_text_recognition: ^0.14.0
   dio: ^5.4.1
+  dio_cookie_manager: ^3.1.2
+  cookie_jar: ^4.0.8
   flutter_slidable: ^3.0.1
   receive_sharing_intent: ^1.6.1
+  lpinyin: ^2.0.3 # 新增拼音库
 
 dev_dependencies:
   flutter_test:

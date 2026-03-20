@@ -3,9 +3,13 @@ import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../models/schedule.dart';
+import '../models/group.dart';
 import '../services/schedule_service.dart';
+import '../services/group_service.dart';
+import '../services/auth_service.dart';
 import '../utils/app_constants.dart';
 import 'add_schedule_page.dart';
+import 'group_detail_page.dart';
 
 class SearchPage extends StatefulWidget {
   const SearchPage({super.key});
@@ -21,14 +25,26 @@ class _SearchPageState extends State<SearchPage> {
   @override
   Widget build(BuildContext context) {
     final scheduleService = context.watch<ScheduleService>();
-    final allSchedules = scheduleService.schedules;
+    final groupService = context.watch<GroupService>();
+    final authService = context.watch<AuthService>();
     
-    final filteredSchedules = allSchedules.where((schedule) {
-      final query = _searchQuery.toLowerCase();
+    final query = _searchQuery.toLowerCase();
+    final bool isAuthenticated = authService.isAuthenticated;
+
+    // 搜索日程
+    final filteredSchedules = _searchQuery.isEmpty ? <Schedule>[] : scheduleService.schedules.where((schedule) {
       return schedule.title.toLowerCase().contains(query) ||
              (schedule.description?.toLowerCase().contains(query) ?? false) ||
              (schedule.location?.toLowerCase().contains(query) ?? false);
     }).toList();
+
+    // 搜索小组（仅在登录时执行）
+    final filteredGroups = (_searchQuery.isEmpty || !isAuthenticated) ? <Group>[] : groupService.myGroups.where((group) {
+      return group.name.toLowerCase().contains(query) ||
+             group.inviteCode.toLowerCase().contains(query);
+    }).toList();
+
+    final bool hasResults = filteredSchedules.isNotEmpty || filteredGroups.isNotEmpty;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -50,7 +66,7 @@ class _SearchPageState extends State<SearchPage> {
             autofocus: true,
             textAlignVertical: TextAlignVertical.center,
             decoration: InputDecoration(
-              hintText: '搜索标题、描述或地点',
+              hintText: '搜索日程、小组或邀请码',
               hintStyle: const TextStyle(fontSize: 14, color: AppColors.textGrey),
               prefixIcon: const Icon(Icons.search, size: 20, color: AppColors.textGrey),
               suffixIcon: _searchQuery.isNotEmpty
@@ -77,16 +93,69 @@ class _SearchPageState extends State<SearchPage> {
         ),
       ),
       body: _searchQuery.isEmpty
-          ? _buildEmptyState('输入关键词开始搜索')
-          : filteredSchedules.isEmpty
-              ? _buildEmptyState('未找到相关日程')
-              : ListView.builder(
+          ? _buildEmptyState('输入关键词开始搜索', Icons.search_rounded)
+          : !hasResults
+              ? _buildEmptyState('未找到相关内容', Icons.sentiment_dissatisfied_rounded)
+              : ListView(
                   padding: const EdgeInsets.all(16),
-                  itemCount: filteredSchedules.length,
-                  itemBuilder: (context, index) {
-                    return _buildScheduleItem(filteredSchedules[index]);
-                  },
+                  children: [
+                    if (filteredGroups.isNotEmpty) ...[
+                      _buildSectionHeader('相关小组', Icons.group_rounded, Colors.blue),
+                      ...filteredGroups.map((g) => _buildGroupItem(g)),
+                      const SizedBox(height: 16),
+                    ],
+                    if (filteredSchedules.isNotEmpty) ...[
+                      _buildSectionHeader('相关日程', Icons.event_note_rounded, Colors.orange),
+                      ...filteredSchedules.map((s) => _buildScheduleItem(s)),
+                    ],
+                  ],
                 ),
+    );
+  }
+
+  Widget _buildSectionHeader(String title, IconData icon, Color color) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12, left: 4),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: color),
+          const SizedBox(width: 8),
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+              color: AppColors.textGrey,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGroupItem(Group group) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: AppColors.divider.withOpacity(0.5)),
+      ),
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: AppColors.primary.withOpacity(0.1),
+          child: Text(group.name[0].toUpperCase(), style: const TextStyle(color: AppColors.primary)),
+        ),
+        title: Text(group.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+        subtitle: Text('邀请码: ${group.inviteCode}', style: const TextStyle(fontSize: 12)),
+        trailing: const Icon(Icons.chevron_right, size: 20),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (context) => GroupDetailPage(group: group)),
+          );
+        },
+      ),
     );
   }
 
@@ -182,23 +251,6 @@ class _SearchPageState extends State<SearchPage> {
                           overflow: TextOverflow.ellipsis,
                         ),
                       ],
-                      if (schedule.location != null && schedule.location!.isNotEmpty) ...[
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            const Icon(Icons.location_on_rounded, size: 14, color: Colors.redAccent),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              child: Text(
-                                schedule.location!,
-                                style: const TextStyle(fontSize: 12, color: AppColors.textGrey),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
                     ],
                   ),
                 ),
@@ -210,12 +262,12 @@ class _SearchPageState extends State<SearchPage> {
     );
   }
 
-  Widget _buildEmptyState(String message) {
+  Widget _buildEmptyState(String message, IconData icon) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.search_rounded, size: 64, color: AppColors.textLightGrey.withOpacity(0.5)),
+          Icon(icon, size: 64, color: AppColors.textLightGrey.withOpacity(0.5)),
           const SizedBox(height: 16),
           Text(
             message,

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:synji_calendar/page/main_screen.dart';
 import 'package:synji_calendar/services/schedule_service.dart';
 import 'package:synji_calendar/services/auth_service.dart';
+import 'package:synji_calendar/services/group_service.dart';
 import 'package:synji_calendar/utils/app_constants.dart';
 
 void main() {
@@ -13,6 +14,7 @@ void main() {
       providers: [
         ChangeNotifierProvider(create: (_) => AuthService()),
         ChangeNotifierProvider(create: (_) => ScheduleService()),
+        ChangeNotifierProvider(create: (_) => GroupService()),
       ],
       child: const MyApp(),
     ),

@@ -20,8 +20,15 @@ class DatabaseHelper {
     String path = join(await getDatabasesPath(), 'calendar.db');
     return await openDatabase(
       path,
-      version: 1,
+      version: 2, // 升级版本到 2 以触发字段迁移
       onCreate: _onCreate,
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          // 为旧版本数据库添加缺失的字段
+          await db.execute('ALTER TABLE schedules ADD COLUMN groupId TEXT');
+          await db.execute('ALTER TABLE schedules ADD COLUMN creatorName TEXT');
+        }
+      },
     );
   }
 
@@ -32,7 +39,9 @@ class DatabaseHelper {
         title TEXT NOT NULL,
         description TEXT,
         dateTime TEXT NOT NULL,
-        location TEXT
+        location TEXT,
+        groupId TEXT,      -- 新增字段
+        creatorName TEXT   -- 新增字段
       )
     ''');
   }

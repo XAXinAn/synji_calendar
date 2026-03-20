@@ -19,119 +19,128 @@ class ProfilePage extends StatelessWidget {
 
     return Scaffold(
       backgroundColor: AppColors.background,
-      body: ListView(
-        padding: const EdgeInsets.symmetric(horizontal: AppSpacings.pagePadding),
+      body: Stack(
         children: [
-          SizedBox(height: statusBarHeight + 20),
-          
-          // 1. 个人信息卡片
-          if (authService.isAuthenticated)
-            _HeaderCard(
-              name: user?.nickname ?? '已登录用户',
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const EditProfilePage()),
-                );
-              },
-            )
-          else
-            _LoginPromptCard(),
-          
-          const SizedBox(height: 16),
-          
-          // 2. 会员权益卡片
-          _buildSectionCard([
-            _MenuItem(
-              icon: Icons.auto_awesome,
-              title: '会员权益',
-              subtitle: '全功能开放 · 畅享无限体验',
-              iconColor: Colors.amber[700]!,
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const MembershipPage()),
-                );
-              },
+          ListView(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacings.pagePadding),
+            children: [
+              SizedBox(height: statusBarHeight + 20),
+              
+              // 1. 个人信息卡片
+              if (authService.isAuthenticated)
+                _HeaderCard(
+                  name: user?.nickname ?? '已登录用户',
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const EditProfilePage()),
+                    );
+                  },
+                )
+              else
+                _LoginPromptCard(),
+              
+              const SizedBox(height: 16),
+              
+              // 2. 会员权益卡片
+              _buildSectionCard([
+                _MenuItem(
+                  icon: Icons.auto_awesome,
+                  title: '会员权益',
+                  subtitle: '全功能开放 · 畅享无限体验',
+                  iconColor: Colors.amber[700]!,
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const MembershipPage()),
+                    );
+                  },
+                ),
+              ]),
+              
+              const SizedBox(height: 16),
+
+              // 3. 云端管理卡片 (仅登录后显示)
+              if (authService.isAuthenticated) ...[
+                _buildSectionCard([
+                  _MenuItem(
+                    icon: Icons.cloud_queue_outlined,
+                    title: '管理云端数据',
+                    subtitle: '查看并按需删除云端备份记录',
+                    iconColor: AppColors.primary,
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => const CloudManagementPage()),
+                      );
+                    },
+                  ),
+                ]),
+                const SizedBox(height: 16),
+              ],
+              
+              // 4. 设置与协议
+              _buildSectionCard([
+                _MenuItem(
+                  icon: Icons.security_outlined,
+                  title: '隐私政策',
+                  iconColor: Colors.blueGrey,
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const PrivacyPolicyPage()),
+                    );
+                  },
+                ),
+                const Divider(height: 1, indent: 56, color: AppColors.divider),
+                if (authService.isAuthenticated)
+                  _MenuItem(
+                    icon: Icons.person_off_outlined,
+                    title: '注销账号',
+                    iconColor: Colors.orange,
+                    onTap: () {
+                      _showDeleteAccountConfirm(context);
+                    },
+                  ),
+              ]),
+
+              const SizedBox(height: 16),
+
+              // 5. 账号操作
+              if (authService.isAuthenticated)
+                _buildSectionCard([
+                  _MenuItem(
+                    icon: Icons.logout_rounded,
+                    title: '退出登录',
+                    iconColor: Colors.redAccent,
+                    onTap: () {
+                      _showLogoutConfirm(context);
+                    },
+                  ),
+                ])
+              else
+                _buildSectionCard([
+                  _MenuItem(
+                    icon: Icons.login_rounded,
+                    title: '立即登录',
+                    iconColor: AppColors.primary,
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => const LoginPage()),
+                      );
+                    },
+                  ),
+                ]),
+              
+              const SizedBox(height: 32),
+            ],
+          ),
+          if (authService.isLoading)
+            Container(
+              color: Colors.black26,
+              child: const Center(child: CircularProgressIndicator()),
             ),
-          ]),
-          
-          const SizedBox(height: 16),
-
-          // 3. 云端管理卡片 (仅登录后显示)
-          if (authService.isAuthenticated) ...[
-            _buildSectionCard([
-              _MenuItem(
-                icon: Icons.cloud_queue_outlined,
-                title: '管理云端数据',
-                subtitle: '查看并按需删除云端备份记录',
-                iconColor: AppColors.primary,
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => const CloudManagementPage()),
-                  );
-                },
-              ),
-            ]),
-            const SizedBox(height: 16),
-          ],
-          
-          // 4. 设置与协议
-          _buildSectionCard([
-            _MenuItem(
-              icon: Icons.security_outlined,
-              title: '隐私政策',
-              iconColor: Colors.blueGrey,
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const PrivacyPolicyPage()),
-                );
-              },
-            ),
-            const Divider(height: 1, indent: 56, color: AppColors.divider),
-            if (authService.isAuthenticated)
-              _MenuItem(
-                icon: Icons.person_off_outlined,
-                title: '注销账号',
-                iconColor: Colors.orange,
-                onTap: () {
-                  _showDeleteAccountConfirm(context);
-                },
-              ),
-          ]),
-
-          const SizedBox(height: 16),
-
-          // 5. 账号操作
-          if (authService.isAuthenticated)
-            _buildSectionCard([
-              _MenuItem(
-                icon: Icons.logout_rounded,
-                title: '退出登录',
-                iconColor: Colors.redAccent,
-                onTap: () {
-                  _showLogoutConfirm(context);
-                },
-              ),
-            ])
-          else
-            _buildSectionCard([
-              _MenuItem(
-                icon: Icons.login_rounded,
-                title: '立即登录',
-                iconColor: AppColors.primary,
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => const LoginPage()),
-                  );
-                },
-              ),
-            ]),
-          
-          const SizedBox(height: 32),
         ],
       ),
     );
@@ -189,13 +198,22 @@ class ProfilePage extends StatelessWidget {
             child: const Text('取消', style: TextStyle(color: AppColors.textGrey)),
           ),
           TextButton(
-            onPressed: () {
-              // 这里可以调用后端的注销接口，目前先执行退出登录逻辑并提示
-              context.read<AuthService>().logout();
+            onPressed: () async {
               Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('账号注销成功')),
-              );
+              try {
+                final success = await context.read<AuthService>().deleteAccount();
+                if (success && context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('账号已注销，所有数据已清除')),
+                  );
+                }
+              } catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('注销失败: $e'), backgroundColor: AppColors.error),
+                  );
+                }
+              }
             },
             child: const Text('确定注销', style: TextStyle(color: Colors.red)),
           ),

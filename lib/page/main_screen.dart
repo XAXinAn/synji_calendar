@@ -248,7 +248,7 @@ class _MainScreenState extends State<MainScreen> {
       child: Container(
         height: 40,
         decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
-        child: const Row(children: [SizedBox(width: 12), Icon(Icons.search, size: 20, color: AppColors.textGrey), SizedBox(width: 8), Text('搜索日程', style: TextStyle(fontSize: 14, color: AppColors.textGrey))]),
+        child: const Row(children: [SizedBox(width: 12), Icon(Icons.search, size: 20, color: AppColors.textGrey), SizedBox(width: 8), Text('搜索日程、小组或邀请码', style: TextStyle(fontSize: 14, color: AppColors.textGrey))]),
       ),
     );
   }

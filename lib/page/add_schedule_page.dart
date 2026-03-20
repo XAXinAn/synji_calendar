@@ -4,12 +4,15 @@ import 'package:provider/provider.dart';
 import '../utils/app_constants.dart';
 import '../models/schedule.dart';
 import '../services/schedule_service.dart';
+import '../services/group_service.dart';
+import '../services/auth_service.dart';
 
 class AddSchedulePage extends StatefulWidget {
   final Schedule? schedule;
   final bool isFromOcr;
   final bool isReviewMode;
   final DateTime? initialDate;
+  final String? targetGroupId; // 新增：明确指定目标小组ID，为null则为个人
 
   const AddSchedulePage({
     super.key, 
@@ -17,6 +20,7 @@ class AddSchedulePage extends StatefulWidget {
     this.isFromOcr = false,
     this.isReviewMode = false,
     this.initialDate,
+    this.targetGroupId,
   });
 
   @override
@@ -29,6 +33,7 @@ class _AddSchedulePageState extends State<AddSchedulePage> {
   late final TextEditingController _descController;
   late final TextEditingController _locationController;
   late DateTime _selectedDateTime;
+  String? _selectedGroupId;
 
   @override
   void initState() {
@@ -37,9 +42,9 @@ class _AddSchedulePageState extends State<AddSchedulePage> {
     _descController = TextEditingController(text: widget.schedule?.description ?? '');
     _locationController = TextEditingController(text: widget.schedule?.location ?? '');
     
-    // 逻辑：如果有传入的日程(编辑模式)，用日程时间。
-    // 如果没有(新建模式)，检查是否有 initialDate。
-    // 如果有 initialDate，需要保留 initialDate 的年月日，但合并当前的 时:分。
+    // 优先级：传入的 targetGroupId > schedule自带的 groupId > null(个人)
+    _selectedGroupId = widget.targetGroupId ?? widget.schedule?.groupId;
+    
     if (widget.schedule != null) {
       _selectedDateTime = widget.schedule!.dateTime;
     } else if (widget.initialDate != null) {
@@ -56,22 +61,25 @@ class _AddSchedulePageState extends State<AddSchedulePage> {
     }
   }
 
+  bool _canEdit() {
+    if (widget.schedule == null || widget.isFromOcr || widget.isReviewMode) return true;
+    if (widget.schedule!.groupId == null || widget.schedule!.groupId!.isEmpty) return true;
+    
+    final userId = context.read<AuthService>().user?.id;
+    final groups = context.read<GroupService>().myGroups;
+    final group = groups.where((g) => g.id == widget.schedule!.groupId).firstOrNull;
+    
+    if (group == null || userId == null) return false;
+    return group.isAdmin(userId);
+  }
+
   Future<void> _selectDateTime(BuildContext context) async {
+    if (!_canEdit()) return;
     final DateTime? pickedDate = await showDatePicker(
       context: context,
       initialDate: _selectedDateTime,
       firstDate: DateTime.now().subtract(const Duration(days: 365)),
       lastDate: DateTime.now().add(const Duration(days: 365 * 10)),
-      builder: (context, child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: const ColorScheme.light(
-              primary: AppColors.primary,
-            ),
-          ),
-          child: child!,
-        );
-      },
     );
     if (pickedDate != null) {
       if (!mounted) return;
@@ -93,40 +101,59 @@ class _AddSchedulePageState extends State<AddSchedulePage> {
     }
   }
 
-  void _saveSchedule() {
+  Future<void> _saveSchedule() async {
+    if (!_canEdit()) return;
     if (_formKey.currentState!.validate()) {
+      final authService = context.read<AuthService>();
+      final user = authService.user;
+      final scheduleService = context.read<ScheduleService>();
+
       final schedule = Schedule(
         id: widget.schedule?.id ?? DateTime.now().millisecondsSinceEpoch.toString(),
         title: _titleController.text.trim(),
         description: _descController.text.trim(),
         dateTime: _selectedDateTime,
         location: _locationController.text.trim().isEmpty ? null : _locationController.text.trim(),
+        groupId: _selectedGroupId,
+        creatorName: widget.schedule?.creatorName ?? user?.nickname ?? user?.username,
       );
       
       if (widget.isReviewMode) {
         Navigator.pop(context, schedule);
       } else {
-        if (widget.schedule == null || widget.isFromOcr) {
-          context.read<ScheduleService>().addSchedule(schedule);
-        } else {
-          context.read<ScheduleService>().updateSchedule(schedule);
+        try {
+          if (widget.schedule == null || widget.isFromOcr) {
+            await scheduleService.addSchedule(schedule, token: user?.token);
+          } else {
+            await scheduleService.updateSchedule(schedule, token: user?.token);
+          }
+          if (!mounted) return;
+          Navigator.pop(context);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text((widget.schedule == null || widget.isFromOcr) ? '日程保存成功' : '日程更新成功')),
+          );
+        } catch (e) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('保存失败: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
         }
-        Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text((widget.schedule == null || widget.isFromOcr) ? '日程保存成功' : '日程更新成功')),
-        );
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final canEdit = _canEdit();
     final isEditing = widget.schedule != null && !widget.isFromOcr && !widget.isReviewMode;
     
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
-        title: Text(widget.isReviewMode ? '核对详情' : (isEditing ? '编辑日程' : '新建日程')),
+        title: Text(widget.isReviewMode ? '核对详情' : (isEditing ? '日程详情' : '新建日程')),
         backgroundColor: AppColors.background,
         elevation: 0,
         leading: IconButton(
@@ -134,20 +161,21 @@ class _AddSchedulePageState extends State<AddSchedulePage> {
           onPressed: () => Navigator.pop(context),
         ),
         actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 8.0),
-            child: TextButton(
-              onPressed: _saveSchedule,
-              child: Text(
-                widget.isReviewMode ? '完成' : '保存',
-                style: const TextStyle(
-                  color: AppColors.primary,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
+          if (canEdit)
+            Padding(
+              padding: const EdgeInsets.only(right: 8.0),
+              child: TextButton(
+                onPressed: _saveSchedule,
+                child: Text(
+                  widget.isReviewMode ? '完成' : '保存',
+                  style: const TextStyle(
+                    color: AppColors.primary,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
                 ),
               ),
             ),
-          ),
         ],
       ),
       body: SingleChildScrollView(
@@ -163,6 +191,7 @@ class _AddSchedulePageState extends State<AddSchedulePage> {
                   hint: '日程标题',
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
+                  enabled: canEdit,
                   validator: (value) => (value == null || value.trim().isEmpty) ? '请输入标题' : null,
                 ),
                 const Divider(height: 1, color: AppColors.divider),
@@ -170,6 +199,7 @@ class _AddSchedulePageState extends State<AddSchedulePage> {
                   controller: _descController,
                   hint: '添加描述',
                   maxLines: 3,
+                  enabled: canEdit,
                 ),
               ]),
               const SizedBox(height: 16),
@@ -180,6 +210,7 @@ class _AddSchedulePageState extends State<AddSchedulePage> {
                   label: '时间',
                   value: DateFormat('yyyy-MM-dd HH:mm').format(_selectedDateTime),
                   onTap: () => _selectDateTime(context),
+                  enabled: canEdit,
                 ),
                 const Divider(height: 1, indent: 52, color: AppColors.divider),
                 _buildTextField(
@@ -187,16 +218,28 @@ class _AddSchedulePageState extends State<AddSchedulePage> {
                   hint: '地点（选填）',
                   icon: Icons.location_on_rounded,
                   iconColor: Colors.redAccent,
+                  enabled: canEdit,
                 ),
               ]),
-              if (isEditing) ...[
+              if (widget.schedule?.creatorName != null) ...[
+                const SizedBox(height: 16),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Text(
+                    '由 ${widget.schedule!.creatorName} 创建',
+                    style: const TextStyle(color: AppColors.textGrey, fontSize: 13),
+                  ),
+                ),
+              ],
+              if (isEditing && canEdit) ...[
                 const SizedBox(height: 32),
                 SizedBox(
                   width: double.infinity,
                   height: 50,
                   child: ElevatedButton(
                     onPressed: () {
-                      context.read<ScheduleService>().removeSchedule(widget.schedule!.id);
+                      final token = context.read<AuthService>().user?.token;
+                      context.read<ScheduleService>().removeSchedule(widget.schedule!.id, token: token);
                       Navigator.pop(context);
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(content: Text('日程已删除')),
@@ -214,6 +257,15 @@ class _AddSchedulePageState extends State<AddSchedulePage> {
                       '删除日程',
                       style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                     ),
+                  ),
+                ),
+              ],
+              if (isEditing && !canEdit) ...[
+                const SizedBox(height: 32),
+                const Center(
+                  child: Text(
+                    '仅限小组管理员或创建者修改',
+                    style: TextStyle(color: AppColors.error, fontSize: 14),
                   ),
                 ),
               ],
@@ -249,6 +301,7 @@ class _AddSchedulePageState extends State<AddSchedulePage> {
     int maxLines = 1,
     double fontSize = 15,
     FontWeight? fontWeight,
+    bool enabled = true,
     String? Function(String?)? validator,
   }) {
     return Padding(
@@ -264,11 +317,12 @@ class _AddSchedulePageState extends State<AddSchedulePage> {
             child: TextFormField(
               controller: controller,
               maxLines: maxLines,
+              enabled: enabled,
               validator: validator,
               style: TextStyle(
                 fontSize: fontSize,
                 fontWeight: fontWeight,
-                color: AppColors.textMain,
+                color: enabled ? AppColors.textMain : AppColors.textGrey,
               ),
               decoration: InputDecoration(
                 hintText: hint,
@@ -290,26 +344,28 @@ class _AddSchedulePageState extends State<AddSchedulePage> {
     required String label,
     required String value,
     required VoidCallback onTap,
+    bool enabled = true,
   }) {
     return InkWell(
-      onTap: onTap,
+      onTap: enabled ? onTap : null,
       borderRadius: BorderRadius.circular(AppSpacings.cardRadius),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
         child: Row(
           children: [
-            Icon(icon, color: iconColor, size: 22),
+            Icon(icon, color: enabled ? iconColor : AppColors.textLightGrey, size: 22),
             const SizedBox(width: 12),
             Text(
               label,
-              style: const TextStyle(fontSize: 15, color: AppColors.textMain),
+              style: TextStyle(fontSize: 15, color: enabled ? AppColors.textMain : AppColors.textGrey),
             ),
             const Spacer(),
             Text(
               value,
-              style: const TextStyle(fontSize: 15, color: AppColors.textGrey),
+              style: TextStyle(fontSize: 15, color: enabled ? AppColors.textGrey : AppColors.textLightGrey),
             ),
-            const Icon(Icons.chevron_right, color: AppColors.textLightGrey, size: 20),
+            if (enabled)
+              const Icon(Icons.chevron_right, color: AppColors.textLightGrey, size: 20),
           ],
         ),
       ),

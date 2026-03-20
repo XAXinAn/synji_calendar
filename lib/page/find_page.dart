@@ -9,6 +9,7 @@ import '../services/schedule_service.dart';
 import '../services/auth_service.dart';
 import 'ocr_confirm_page.dart';
 import 'login_page.dart';
+import 'group_sharing_page.dart';
 
 class FindPage extends StatefulWidget {
   const FindPage({super.key});
@@ -36,6 +37,13 @@ class _FindPageState extends State<FindPage> {
         'color': AppColors.primary,
         'icon': Icons.camera_enhance_rounded,
         'tag': '智能',
+      },
+      {
+        'title': '组内日程共享',
+        'subtitle': '团队协作，日程同步共享',
+        'color': Colors.blue,
+        'icon': Icons.group_rounded,
+        'tag': '共享',
       },
       {
         'title': '语音快速添加',
@@ -110,7 +118,8 @@ class _FindPageState extends State<FindPage> {
 
   Widget _buildFeatureCard(BuildContext context, Map<String, dynamic> feature) {
     final Color themeColor = feature['color'] as Color;
-    final bool isAvailable = feature['tag'] == '智能';
+    final String tag = feature['tag'];
+    final bool isAvailable = tag == '智能' || tag == '共享';
 
     return Container(
       decoration: BoxDecoration(
@@ -135,16 +144,20 @@ class _FindPageState extends State<FindPage> {
               return;
             }
 
-            if (isAvailable) {
+            if (feature['title'] == 'AI 识图建历') {
               _showImagePickerOptions(context);
+            } else if (feature['title'] == '组内日程共享') {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const GroupSharingPage()),
+              );
             } else {
-              // 优化：使用 Fixed 行为，实现加号避让效果
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
                   content: Text('${feature['title']} 正在全力开发中...'),
                   behavior: SnackBarBehavior.fixed,
                   duration: const Duration(seconds: 2),
-                  backgroundColor: const Color(0xFF323232), // 深色背景，符合你截图的风格
+                  backgroundColor: const Color(0xFF323232),
                 ),
               );
             }
@@ -169,16 +182,22 @@ class _FindPageState extends State<FindPage> {
                         color: themeColor,
                       ),
                     ),
-                    if (!isAvailable)
+                    if (tag != '智能')
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
-                          color: AppColors.textLightGrey.withOpacity(0.2),
+                          color: tag == '共享' 
+                            ? AppColors.primary.withOpacity(0.1) 
+                            : AppColors.textLightGrey.withOpacity(0.2),
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
-                          feature['tag'],
-                          style: const TextStyle(fontSize: 10, color: AppColors.textGrey),
+                          tag,
+                          style: TextStyle(
+                            fontSize: 10, 
+                            color: tag == '共享' ? AppColors.primary : AppColors.textGrey,
+                            fontWeight: tag == '共享' ? FontWeight.bold : FontWeight.normal,
+                          ),
                         ),
                       ),
                   ],

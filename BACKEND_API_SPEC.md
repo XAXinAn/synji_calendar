@@ -1,110 +1,78 @@
-# 讯极日历 (Synji Calendar) 后端 API 接口文档 (v2.0)
+# 讯极日历 - 后端 API 接口文档 (v2.5)
 
-本规范定义了前后端交互的标准格式，采用“本地优先 (Local-First)” 架构。云端作为日程的镜像备份与同步中转站，并提供 AI 代理服务。
-
-## 1. 基础规范
-- **Base URL**: `http://47.99.102.191:8080/v1` (本地调试: `http://localhost:8080/v1`)
-- **数据格式**: `application/json; charset=utf-8`
-- **认证方式**: `Bearer Token`。所有受保护接口需在 Header 携带 `Authorization: Bearer {token}`。
-- **公共响应结构**:
-  ```json
-  {
-    "code": 200,      // 200 成功，401 鉴权失败，400 参数错误，500 服务器错误
-    "message": "提示信息",
-    "data": {}        // 业务数据，根据接口不同为对象或数组
-  }
-  ```
+## 1. 项目概述
+*   **项目名称**：讯极日历 (Synji Calendar)
+*   **架构**：本地优先 (Local-First)，云端作为镜像备份与 AI 代理，并提供小组协作共享功能。
+*   **认证方式**：基于 JWT (JSON Web Token) 的 `Bearer Token` 认证
 
 ---
 
-## 2. 用户认证 (Auth)
-
-### 2.1 注册与登录
-- **路径**: `/auth/register` (POST) / `/auth/login` (POST)
-- **请求体**: `{"username": "...", "password": "..."}`
-- **成功响应 (`data`)**:
-  ```json
-  {
-    "id": "1",
-    "username": "admin",
-    "nickname": "admin",
-    "accessToken": "eyJhbGciOiJIUzI1...",
-    "accessTokenExpiresIn": 1800
-  }
-  ```
-- **Refresh Token**: 后端应通过 `HttpOnly Cookie` (建议名 `refreshToken`) 返回刷新令牌。
-
-### 2.2 Token 刷新
-- **路径**: `/auth/refresh` (POST)
-- **说明**: 依赖 Cookie 中的 `refreshToken`。
-- **成功响应 (`data`)**: 返回新的 `{"accessToken": "...", "accessTokenExpiresIn": 1800}`。
+## 2. 基础规范
+*   **Base URL**: `http://localhost:8080/v1` (开发环境) / `http://47.99.102.191:8080/v1` (测试环境)
+*   **公共 Header**:
+    *   `Content-Type: application/json`
+    *   `Authorization: Bearer {token}` (所有受保护接口均需携带)
 
 ---
 
-## 3. 用户资料 (Profile)
+## 3. 数据模型定义 (Data Models)
 
-### 3.1 获取/修改个人资料
-- **路径**: `/auth/me`
-- **GET (获取)**: 返回 `{"id": "String", "username": "String", "nickname": "String"}`。
-- **PATCH (修改)**: 请求体 `{"nickname": "String"}`，仅支持更新昵称。
+### 3.1 Schedule (日程对象)
+| 字段名 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `id` | String | 唯一标识 (建议客户端生成 UUID) |
+| `title` | String | 标题 (必填) |
+| `description` | String | 详细描述 (可选) |
+| `dateTime` | String | 时间 (ISO8601 格式，如: `2024-05-20T14:00:00Z`) |
+| `location` | String | 地点 (可选) |
+| `groupId` | String | 小组ID (个人日程为 null，小组日程必填) |
+| `creatorName` | String | 创建者昵称 |
 
----
-
-## 4. 日程同步与管理 (Schedule Sync)
-
-### 4.1 镜像同步 (Mirror Sync - 上传)
-- **路径**: `/schedules/sync` (POST)
-- **说明**: 前端发送本地全量日程数组。
-- **后端逻辑**: 
-  1. 执行 **Upsert**: 对传入列表中的记录进行更新或插入。
-  2. 执行 **物理删除**: 删除数据库中该用户下、但不在当前请求列表中的所有日程记录。
-  3. **目标**: 确保云端数据与前端上报的“快照”完全一致。
-
-### 4.2 获取日程列表 (Pull - 下载)
-- **路径**: `/schedules` (GET)
-- **说明**: 返回当前用户在云端存储的所有日程数组。
-
-### 4.3 独立管理接口 (不影响本地)
-- **单个删除**: `DELETE /schedules/{id}`
-- **全部清空**: `DELETE /schedules/clear`
-- **注意**: 这两个操作仅清除云端备份，不应通过同步机制反向删除手机本地数据。
+### 3.2 Group (小组对象)
+| 字段名 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `id` | String | 唯一标识 |
+| `name` | String | 小组名称 |
+| `creatorId` | String | 创建者用户 ID |
+| `inviteCode` | String | 邀请码 |
+| `memberCount` | int | **(新增)** 成员总数。用于列表展示，避免拉取完整 ID 列表。 |
+| `adminIds` | List<String> | 管理员 ID 列表 |
+| `createdAt` | String | 创建时间 |
 
 ---
 
-## 5. AI 智能解析 (AI Proxy)
+## 4. 日程管理与同步 (Schedule & Sync)
 
-### 5.1 文本解析接口
-- **路径**: `/ai/parse-schedule` (POST)
-- **请求体**: 
-  ```json
-  {
-    "text": "原始待解析文本",
-    "context": {
-      "currentTime": "2024-05-20 10:00:00",
-      "currentYear": "2024"
-    }
-  }
-  ```
-- **后端 Prompt 指引**:
-  > 任务：将文本转为 JSON。当前时间：{currentTime}。
-  > 规则：年份缺失补 {currentYear}。返回 JSON 数组。
-  > 字段：title, time (YYYY-MM-DD HH:mm:ss), location, description。
-- **成功响应数据 (`data`)**: 
-  ```json
-  [
-    {
-      "title": "会议",
-      "time": "2024-05-20 15:30:00",
-      "location": "302室",
-      "description": "无"
-    }
-  ]
-  ```
+### 4.1 个人日程镜像同步 (Upsert)
+*   **接口地址**：`/schedules/sync`
+*   **请求方法**：`POST`
+*   **请求体**：`List<Schedule>`
+*   **逻辑**：后端接收列表，根据 `id` 更新或插入。仅限 `groupId` 为空的记录。
 
 ---
 
-## 6. 开发协议
-1. **字段兼容**: 前端已兼容解析 `token` 和 `accessToken` 两个 Key。
-2. **安全隔离**: 所有数据操作必须基于 Token 解析出的 `userId`。
-3. **HTTP 401**: 任何涉及 Token 失效的情况必须返回 401 状态码。
-4. **CORS**: 必须配置 `Allow-Credentials: true` 且 Origin 不可为 `*`。
+## 5. 小组日程同步 (Group Sync)
+
+### 5.1 获取小组日程列表
+*   **接口地址**：`/groups/{groupId}/schedules`
+*   **请求方法**：`GET`
+*   **返回要求**：必须按照 `dateTime` **从早到晚**升序排列。
+
+### 5.2 发布/更新小组日程
+*   **接口地址**：`/groups/{groupId}/schedules`
+*   **请求方法**：`POST`
+*   **权限**：仅限该小组的**创建者**或**管理员**。
+
+---
+
+## 6. 小组管理 (Group Management)
+
+### 6.1 获取我的小组列表
+*   **接口地址**：`/groups`
+*   **请求方法**：`GET`
+*   **返回数据要求**：必须包含 `memberCount` 字段，且 `creatorId` 需准确，以便前端区分“我创建的”和“我加入的”。
+
+---
+
+## 7. AI 智能解析 (AI Proxy)
+*(保持 v2.2 内容不变)*
