@@ -28,7 +28,8 @@ dependencies:
   cookie_jar: ^4.0.8
   flutter_slidable: ^3.0.1
   receive_sharing_intent: ^1.6.1
-  lpinyin: ^2.0.3 # 新增拼音库
+  lpinyin: ^2.0.3
+  connectivity_plus: ^6.1.1 # 新增：网络连接状态监听
 
 dev_dependencies:
   flutter_test:
@@ -40,7 +41,7 @@ flutter_launcher_icons:
   android: "ic_launcher"
   ios: true
   image_path: "assets/images/icon.png"
-  adaptive_icon_background: "#0081E0" # 匹配图标背景蓝色
+  adaptive_icon_background: "#0081E0"
   adaptive_icon_foreground: "assets/images/icon.png"
 
 flutter:

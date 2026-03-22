@@ -1,9 +1,14 @@
+import 'dart:async';
+import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:logger/logger.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/schedule.dart';
 import '../utils/app_constants.dart';
 import 'database_helper.dart';
+
+enum SyncStatus { idle, syncing, error, success }
 
 class ScheduleService extends ChangeNotifier {
   final List<Schedule> _schedules = [];
@@ -14,12 +19,14 @@ class ScheduleService extends ChangeNotifier {
   DateTime _selectedDate = DateTime.now();
   DateTime get selectedDate => _selectedDate;
 
-  bool _isProcessing = false;
-  String _processingMessage = '';
-  double? _processingProgress;
+  SyncStatus _syncStatus = SyncStatus.idle;
+  SyncStatus get syncStatus => _syncStatus;
 
+  bool _isProcessing = false;
   bool get isProcessing => _isProcessing;
+  String _processingMessage = '';
   String get processingMessage => _processingMessage;
+  double? _processingProgress;
   double? get processingProgress => _processingProgress;
 
   List<Schedule> get schedules => List.unmodifiable(_schedules);
@@ -33,89 +40,238 @@ class ScheduleService extends ChangeNotifier {
     _dio = Dio(BaseOptions(
       baseUrl: AppConfig.baseUrl,
       connectTimeout: const Duration(seconds: 5),
-      receiveTimeout: const Duration(seconds: 3),
+      receiveTimeout: const Duration(seconds: 10),
       contentType: 'application/json',
+    ));
+    
+    _dio.interceptors.add(LogInterceptor(
+      requestBody: true,
+      responseBody: true,
+      logPrint: (obj) => debugPrint('🌐 [Network] $obj'),
     ));
   }
 
-  // 1. 获取云端列表 (仅个人日程)
-  Future<List<Schedule>> fetchCloudSchedules(String? token) async {
-    if (token == null) return [];
-    try {
-      _dio.options.headers['Authorization'] = 'Bearer $token';
-      final response = await _dio.get('/schedules');
-      if (response.data['code'] == 200) {
-        final List<dynamic> data = response.data['data'];
-        return data.map((e) => Schedule.fromMap(e)).toList();
-      }
-    } catch (e) {
-      _logger.e('获取云端列表失败: $e');
-    }
-    return [];
+  Future<void> clearLocalData() async {
+    _schedules.clear();
+    await _dbHelper.clearAllSchedules();
+    notifyListeners();
   }
 
-  // 2. 删除个人云端记录
-  Future<bool> deleteSingleCloudSchedule(String? token, String id) async {
-    if (token == null) return false;
+  Future<String?> _getSafeToken(String? providedToken) async {
+    if (providedToken != null && providedToken.isNotEmpty) return providedToken;
+    final prefs = await SharedPreferences.getInstance();
+    final userJson = prefs.getString('user_data');
+    if (userJson != null) {
+      final userData = jsonDecode(userJson);
+      return userData['token'];
+    }
+    return null;
+  }
+
+  /// 统一数据加载：从本地数据库读取并刷新内存列表
+  Future<void> loadSchedules() async {
     try {
-      _dio.options.headers['Authorization'] = 'Bearer $token';
-      final response = await _dio.delete('/schedules/$id');
-      return response.data['code'] == 200;
+      final data = await _dbHelper.getActiveSchedules();
+      _schedules.clear();
+      // 终极防线：再次确保内存中没有 isDeleted 的数据
+      _schedules.addAll(data.where((s) => !s.isDeleted));
+      _schedules.sort((a, b) => a.dateTime.compareTo(b.dateTime));
+      notifyListeners();
     } catch (e) {
-      _logger.e('删除云端日程失败: $e');
-      return false;
+      _logger.e('loadSchedules error: $e');
     }
   }
 
-  // 3. 核心同步逻辑 (仅针对个人日程)
-  Future<void> syncWithCloud(String? token) async {
-    if (token == null) return;
+  /// 全量/增量同步逻辑 (主要用于个人日程后台同步和小组日程下行拉取)
+  Future<void> syncWithCloud(String? token, {bool silent = false}) async {
+    String? effectiveToken = await _getSafeToken(token);
+    if (effectiveToken == null || _syncStatus == SyncStatus.syncing) return;
     
-    setProcessing(true, message: '正在同步个人云端数据...');
+    _syncStatus = SyncStatus.syncing;
+    if (!silent) setProcessing(true, message: '同步中...');
+    notifyListeners();
+
     try {
-      _dio.options.headers['Authorization'] = 'Bearer $token';
+      final prefs = await SharedPreferences.getInstance();
+      final lastSyncStr = prefs.getString('last_sync_timestamp');
+      final lastSyncTime = lastSyncStr != null ? DateTime.parse(lastSyncStr) : DateTime.fromMillisecondsSinceEpoch(0);
+      
+      _dio.options.headers['Authorization'] = 'Bearer $effectiveToken';
 
-      // 【上传】仅上传本地个人日程
-      final localSchedules = await _dbHelper.getSchedules();
-      final personalSchedules = localSchedules.where((s) => s.groupId == null || s.groupId!.isEmpty).toList();
-      await _dio.post('/schedules/sync', data: personalSchedules.map((e) => e.toMap()).toList());
+      // 1. 上行 (Push) - 仅推本地个人日程变动
+      final dirtySchedules = await _dbHelper.getDirtySchedules(lastSyncTime);
+      if (dirtySchedules.isNotEmpty) {
+        final syncPayload = {
+          "client_sync_time": DateTime.now().toUtc().toIso8601String(),
+          "changes": dirtySchedules.map((e) => e.toMap()).toList(),
+        };
+        await _dio.post('/schedules/delta-sync', data: syncPayload);
+      }
 
-      // 【拉取】仅拉取个人日程
-      final response = await _dio.get('/schedules');
+      // 2. 下行 (Fetch) - 拉取云端所有变动（含小组日程）
+      final response = await _dio.get('/schedules/delta-fetch', queryParameters: {'since': lastSyncTime.toUtc().toIso8601String()});
       if (response.data['code'] == 200) {
-        final List<dynamic> remoteData = response.data['data'];
-        final remoteSchedules = remoteData.map((e) => Schedule.fromMap(e)).toList();
-        
-        // 核心改动：同步前先清理本地个人日程，防止重复
-        // 或者使用 insert (replace 模式)
-        for (var s in remoteSchedules) {
-          await _dbHelper.insertSchedule(s);
+        final List<dynamic> remoteData = response.data['data'] ?? [];
+        for (var item in remoteData) {
+          final s = Schedule.fromMap(item);
+          if (s.isDeleted) {
+            await _dbHelper.physicalDelete(s.id);
+          } else {
+            await _dbHelper.insertSchedule(s);
+          }
         }
       }
       
+      await prefs.setString('last_sync_timestamp', DateTime.now().toUtc().toIso8601String());
       await loadSchedules();
-      setProcessing(false);
+      
+      _syncStatus = SyncStatus.success;
+      if (!silent) setProcessing(false);
+      Future.delayed(const Duration(seconds: 1), () => _resetSyncStatus());
     } catch (e) {
-      _logger.e('同步失败: $e');
-      setProcessing(false, message: '同步失败: 网络异常');
+      _handleSyncError(e, silent);
     }
   }
 
-  // 4. 清空云端备份
-  Future<bool> clearCloudSchedules(String? token) async {
-    if (token == null) return false;
-    
-    setProcessing(true, message: '正在清空云端备份...');
-    try {
-      _dio.options.headers['Authorization'] = 'Bearer $token';
-      final response = await _dio.delete('/schedules/clear');
-      setProcessing(false);
-      return response.data['code'] == 200;
-    } catch (e) {
-      _logger.e('清空云端失败: $e');
-      setProcessing(false);
-      return false;
+  // --- 重构后的 CRUD：严格区分小组与个人 ---
+
+  Future<void> addSchedule(Schedule schedule, {String? token}) async {
+    if (schedule.groupId != null && schedule.groupId!.isNotEmpty) {
+      // 小组日程：必须先成功同步云端
+      await _groupDirectSync(schedule, token, isDelete: false);
+    } else {
+      // 个人日程：本地优先
+      final newSchedule = schedule.copyWith(updatedAt: DateTime.now(), isDeleted: false);
+      await _dbHelper.insertSchedule(newSchedule);
+      await loadSchedules();
+      syncWithCloud(token, silent: true);
     }
+  }
+
+  Future<void> updateSchedule(Schedule schedule, {String? token}) async {
+    if (schedule.groupId != null && schedule.groupId!.isNotEmpty) {
+      // 小组日程：必须先成功同步云端
+      await _groupDirectSync(schedule, token, isDelete: false);
+    } else {
+      // 个人日程：本地优先
+      final updated = schedule.copyWith(updatedAt: DateTime.now(), isDeleted: false);
+      await _dbHelper.insertSchedule(updated);
+      await loadSchedules();
+      syncWithCloud(token, silent: true);
+    }
+  }
+
+  Future<void> removeSchedule(String id, {String? token}) async {
+    // 强制从底层查，不分活跃状态
+    final db = await _dbHelper.database;
+    final List<Map<String, dynamic>> maps = await db.query('schedules', where: 'id = ?', whereArgs: [id]);
+    if (maps.isEmpty) return;
+    
+    final target = Schedule.fromMap(maps.first);
+    if (target.groupId != null && target.groupId!.isNotEmpty) {
+      // 小组日程：强一致性云端物理删除
+      await _groupDirectSync(target, token, isDelete: true);
+    } else {
+      // 个人日程：本地逻辑删除
+      await _dbHelper.markAsDeleted(id);
+      await loadSchedules();
+      syncWithCloud(token, silent: true);
+    }
+  }
+
+  /// 【小组专用】直接同步逻辑：成功后才更新本地显示，删除则彻底抹除
+  Future<void> _groupDirectSync(Schedule schedule, String? token, {required bool isDelete}) async {
+    String? effectiveToken = await _getSafeToken(token);
+    if (effectiveToken == null) throw Exception('请登录后操作小组日程');
+
+    setProcessing(true, message: isDelete ? '正在同步云端删除...' : '正在同步小组日程...');
+    try {
+      _dio.options.headers['Authorization'] = 'Bearer $effectiveToken';
+      final syncTime = DateTime.now().toUtc().toIso8601String();
+      
+      final syncPayload = {
+        "client_sync_time": syncTime,
+        "changes": [
+          {
+            ...schedule.toMap(),
+            "isDeleted": isDelete ? 1 : 0,
+            "updatedAt": syncTime,
+          }
+        ]
+      };
+      
+      final response = await _dio.post('/schedules/delta-sync', data: syncPayload);
+      if (response.data['code'] == 200) {
+        if (isDelete) {
+          // 云端删除成功 -> 本地物理抹除 -> 彻底不可见
+          await _dbHelper.physicalDelete(schedule.id);
+        } else {
+          // 云端保存成功 -> 更新本地显示缓存
+          await _dbHelper.insertSchedule(schedule.copyWith(updatedAt: DateTime.now()));
+        }
+        await loadSchedules();
+        setProcessing(false);
+      } else {
+        throw Exception(response.data['message'] ?? '操作失败');
+      }
+    } on DioException catch (e) {
+      setProcessing(false);
+      String msg = e.response?.data?['message'] ?? '网络请求失败';
+      if (e.response?.statusCode == 403) msg = '权限不足：只有管理员可操作此小组日程';
+      throw Exception(msg);
+    }
+  }
+
+  /// 【专为小组页面设计】从云端拉取并刷新特定小组数据
+  Future<List<Schedule>> fetchGroupSchedulesDirect(String groupId, String? token) async {
+    String? effectiveToken = await _getSafeToken(token);
+    if (effectiveToken == null) return [];
+
+    try {
+      _dio.options.headers['Authorization'] = 'Bearer $effectiveToken';
+      // 注意：这里直接调用后端的按小组查询接口，或者复用同步接口
+      final response = await _dio.get('/groups/$groupId/schedules');
+      if (response.data['code'] == 200) {
+        final List data = response.data['data'] ?? [];
+        final List<Schedule> list = [];
+        for (var item in data) {
+          final s = Schedule.fromMap(item);
+          if (s.isDeleted) {
+            await _dbHelper.physicalDelete(s.id);
+          } else {
+            await _dbHelper.insertSchedule(s);
+            list.add(s);
+          }
+        }
+        await loadSchedules();
+        return list;
+      }
+    } catch (e) {
+      debugPrint('fetchGroupSchedulesDirect error: $e');
+    }
+    // 降级：从本地已加载的数据中过滤
+    return _schedules.where((s) => s.groupId == groupId).toList();
+  }
+
+  // --- 工具方法 ---
+
+  void _resetSyncStatus() {
+    _syncStatus = SyncStatus.idle;
+    notifyListeners();
+  }
+
+  void _handleSyncError(dynamic e, bool silent) {
+    _syncStatus = SyncStatus.error;
+    if (!silent) setProcessing(false);
+    notifyListeners();
+  }
+
+  List<Schedule> getSchedulesForDay(DateTime day) {
+    return _schedules.where((s) {
+      return s.dateTime.year == day.year &&
+          s.dateTime.month == day.month &&
+          s.dateTime.day == day.day;
+    }).toList();
   }
 
   void setSelectedDate(DateTime date) {
@@ -128,100 +284,5 @@ class ScheduleService extends ChangeNotifier {
     _processingMessage = message;
     _processingProgress = progress;
     notifyListeners();
-  }
-
-  Future<void> loadSchedules() async {
-    try {
-      // 核心改动：loadSchedules 仅加载本地个人日程
-      final data = await _dbHelper.getSchedules();
-      _schedules.clear();
-      _schedules.addAll(data.where((s) => s.groupId == null || s.groupId!.isEmpty));
-      _sortSchedules();
-      notifyListeners();
-    } catch (e) {
-      _logger.e('Failed to load schedules: $e');
-    }
-  }
-
-  void _sortSchedules() {
-    _schedules.sort((a, b) => a.dateTime.compareTo(b.dateTime));
-  }
-
-  // 修改：addSchedule 区分个人和小组
-  Future<void> addSchedule(Schedule schedule, {String? token}) async {
-    try {
-      if (schedule.groupId == null || schedule.groupId!.isEmpty) {
-        // 个人日程：本地优先
-        await _dbHelper.insertSchedule(schedule);
-        _schedules.add(schedule);
-        _sortSchedules();
-        notifyListeners();
-      } else {
-        // 小组日程：纯云端，不存本地库
-        if (token != null) {
-          _dio.options.headers['Authorization'] = 'Bearer $token';
-          await _dio.post('/groups/${schedule.groupId}/schedules', data: schedule.toMap());
-        } else {
-          throw Exception('登录已过期，无法发布小组日程');
-        }
-      }
-    } catch (e) {
-      _logger.e('Failed to add schedule: $e');
-      rethrow;
-    }
-  }
-
-  // 修改：updateSchedule 区分个人和小组
-  Future<void> updateSchedule(Schedule updatedSchedule, {String? token}) async {
-    try {
-      if (updatedSchedule.groupId == null || updatedSchedule.groupId!.isEmpty) {
-        // 个人日程：更新本地
-        await _dbHelper.updateSchedule(updatedSchedule);
-        final index = _schedules.indexWhere((s) => s.id == updatedSchedule.id);
-        if (index != -1) {
-          _schedules[index] = updatedSchedule;
-          _sortSchedules();
-          notifyListeners();
-        }
-      } else {
-        // 小组日程：仅同步云端
-        if (token != null) {
-          _dio.options.headers['Authorization'] = 'Bearer $token';
-          await _dio.post('/groups/${updatedSchedule.groupId}/schedules', data: updatedSchedule.toMap());
-        }
-      }
-    } catch (e) {
-      _logger.e('Failed to update schedule: $e');
-      rethrow;
-    }
-  }
-
-  // 修改：removeSchedule 区分个人和小组
-  Future<void> removeSchedule(String id, {String? token, String? groupId}) async {
-    try {
-      if (groupId == null || groupId.isEmpty) {
-        // 个人日程：本地删除
-        await _dbHelper.deleteSchedule(id);
-        _schedules.removeWhere((s) => s.id == id);
-        notifyListeners();
-      } else {
-        // 小组日程：云端删除
-        if (token != null) {
-          _dio.options.headers['Authorization'] = 'Bearer $token';
-          await _dio.delete('/groups/$groupId/schedules/$id');
-        }
-      }
-    } catch (e) {
-      _logger.e('Failed to remove schedule: $e');
-    }
-  }
-
-  List<Schedule> getSchedulesForDay(DateTime day) {
-    // 这里仅返回个人日程
-    return _schedules.where((s) {
-      return s.dateTime.year == day.year &&
-          s.dateTime.month == day.month &&
-          s.dateTime.day == day.day;
-    }).toList();
   }
 }

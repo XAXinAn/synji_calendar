@@ -44,7 +44,6 @@ class _OcrConfirmPageState extends State<OcrConfirmPage> {
       if (mounted) {
         Navigator.pop(context); 
         
-        // 优化：使用 Fixed 行为，移除动作按钮，统一深色风格
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('已成功存入本地库 (${_schedules.length} 条)'),
@@ -122,22 +121,9 @@ class _OcrConfirmPageState extends State<OcrConfirmPage> {
             )
           : Column(
               children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.info_outline, size: 14, color: AppColors.textGrey),
-                      const SizedBox(width: 4),
-                      Text(
-                        '确认后日程将存入本机，点击首页右上角可同步云端',
-                        style: TextStyle(fontSize: 11, color: AppColors.textGrey.withOpacity(0.8)),
-                      ),
-                    ],
-                  ),
-                ),
                 Expanded(
                   child: ListView.builder(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
                     itemCount: _schedules.length,
                     itemBuilder: (context, index) {
                       final s = _schedules[index];

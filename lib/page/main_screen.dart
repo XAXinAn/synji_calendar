@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:synji_calendar/utils/app_constants.dart';
 import '../services/schedule_service.dart';
 import '../services/auth_service.dart';
@@ -27,9 +28,10 @@ class MainScreen extends StatefulWidget {
   State<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends State<MainScreen> {
+class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   int _selectedIndex = 0;
   StreamSubscription? _intentDataStreamSubscription;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
   final OCRService _ocrService = OCRService();
   final LLMService _llmService = LLMService();
 
@@ -42,19 +44,54 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkPrivacyPolicy();
       _initSharingIntent();
+      _initConnectivityListener();
+      _autoSync(); 
     });
   }
 
+  void _initConnectivityListener() {
+    _connectivitySubscription = Connectivity().onConnectivityChanged.listen((List<ConnectivityResult> results) {
+      bool isConnected = results.any((result) => result != ConnectivityResult.none);
+      if (isConnected) {
+        debugPrint('🌐 网络已恢复，触发自动同步...');
+        _autoSync();
+      }
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _autoSync();
+    }
+  }
+
+  void _autoSync() {
+    final auth = context.read<AuthService>();
+    if (auth.isAuthenticated) {
+      context.read<ScheduleService>().syncWithCloud(auth.user?.token, silent: true);
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _intentDataStreamSubscription?.cancel();
+    _connectivitySubscription?.cancel();
+    _ocrService.dispose();
+    super.dispose();
+  }
+
+  // --- 隐私政策、图片分享等逻辑保持不变 ---
   Future<void> _checkPrivacyPolicy() async {
     final prefs = await SharedPreferences.getInstance();
     final bool hasAgreed = prefs.getBool('privacy_policy_agreed') ?? false;
-    
-    if (!hasAgreed && mounted) {
-      _showPrivacyDialog();
-    }
+    if (!hasAgreed && mounted) _showPrivacyDialog();
   }
 
   void _showPrivacyDialog() {
@@ -65,39 +102,25 @@ class _MainScreenState extends State<MainScreen> {
         onWillPop: () async => false,
         child: AlertDialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Center(
-            child: Text(
-              '温馨提示',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-            ),
-          ),
+          title: const Center(child: Text('温馨提示', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18))),
           content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                RichText(
-                  text: TextSpan(
-                    style: const TextStyle(color: AppColors.textMain, fontSize: 14, height: 1.6),
-                    children: [
-                      const TextSpan(text: '欢迎您使用讯极日历！我们非常重视您的个人信息和隐私保护。在您使用服务之前，请仔细阅读'),
-                      TextSpan(
-                        text: '《隐私政策》',
-                        style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold),
-                        recognizer: TapGestureRecognizer()
-                          ..onTap = () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(builder: (context) => const PrivacyPolicyPage()),
-                            );
-                          },
-                      ),
-                      const TextSpan(text: '。我们将按照您的授权来处理您的信息，为您提供日程同步、AI解析等服务。\n\n'),
-                      const TextSpan(text: '1. 为了更好的向您提供注册认证、发布信息等功能，我们会收集、使用必要的信息；\n'),
-                      const TextSpan(text: '2. 基于您的授权我们可能会获取您的相机、相册等权限。'),
-                    ],
+            child: RichText(
+              text: TextSpan(
+                style: const TextStyle(color: AppColors.textMain, fontSize: 14, height: 1.6),
+                children: [
+                  const TextSpan(text: '欢迎您使用讯极日历！我们非常重视您的个人信息和隐私保护。在您使用服务之前，请仔细阅读'),
+                  TextSpan(
+                    text: '《隐私政策》',
+                    style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold),
+                    recognizer: TapGestureRecognizer()..onTap = () {
+                      Navigator.push(context, MaterialPageRoute(builder: (context) => const PrivacyPolicyPage()));
+                    },
                   ),
-                ),
-              ],
+                  const TextSpan(text: '。我们将按照您的授权来处理您的信息，为您提供日程同步、AI解析等服务。\n\n'),
+                  const TextSpan(text: '1. 为了更好的向您提供注册认证、发布信息等功能，我们会收集、使用必要的信息；\n'),
+                  const TextSpan(text: '2. 基于您的授权我们可能会获取您的相机、相册等权限。'),
+                ],
+              ),
             ),
           ),
           actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -123,10 +146,7 @@ class _MainScreenState extends State<MainScreen> {
                   ),
                 ),
                 const SizedBox(height: 8),
-                TextButton(
-                  onPressed: () => exit(0),
-                  child: const Text('不同意并退出', style: TextStyle(color: AppColors.textGrey)),
-                ),
+                TextButton(onPressed: () => exit(0), child: const Text('不同意并退出', style: TextStyle(color: AppColors.textGrey))),
               ],
             ),
           ],
@@ -146,43 +166,29 @@ class _MainScreenState extends State<MainScreen> {
     });
   }
 
-  @override
-  void dispose() {
-    _intentDataStreamSubscription?.cancel();
-    _ocrService.dispose();
-    super.dispose();
-  }
-
   Future<void> _handleSharedImages(List<SharedMediaFile> files) async {
     if (!mounted) return;
     setState(() => _selectedIndex = 0);
-
     final scheduleService = context.read<ScheduleService>();
     final authService = context.read<AuthService>();
     List<Schedule> allParsedSchedules = [];
-
     try {
       for (int i = 0; i < files.length; i++) {
         String path = files[i].path;
         if (path.startsWith('file://')) path = path.replaceFirst('file://', '');
         if (!await File(path).exists()) continue;
-
         double step = 1.0 / files.length;
         scheduleService.setProcessing(true, message: '正在识别 (${i + 1}/${files.length})...', progress: i * step + (step * 0.3));
-        
         final String ocrResult = await _ocrService.processImage(path);
         if (ocrResult.trim().isEmpty) continue;
-
         scheduleService.setProcessing(true, message: 'AI 解析中 (${i + 1}/${files.length})...', progress: i * step + (step * 0.8));
         final dynamic llmResult = await _llmService.sendToBot(ocrResult, token: authService.user?.token);
-
         if (llmResult is List) {
           allParsedSchedules.addAll(llmResult.map((data) => _mapToSchedule(data, i)));
         } else if (llmResult is Map<String, dynamic>) {
           allParsedSchedules.add(_mapToSchedule(llmResult, i));
         }
       }
-
       scheduleService.setProcessing(false);
       if (allParsedSchedules.isNotEmpty && mounted) {
         Navigator.push(context, MaterialPageRoute(builder: (context) => OcrConfirmPage(initialSchedules: allParsedSchedules)));
@@ -218,58 +224,54 @@ class _MainScreenState extends State<MainScreen> {
       title: _selectedIndex == 0 ? _buildSearchBox() : const Text('功能广场'),
       backgroundColor: AppColors.background,
       elevation: 0,
-      actions: _selectedIndex == 0 ? [
-        PopupMenuButton<String>(
-          offset: const Offset(0, 50),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-          onSelected: (value) {
-            if (value == 'sync') {
-              final auth = context.read<AuthService>();
-              if (auth.isAuthenticated) {
-                context.read<ScheduleService>().syncWithCloud(auth.user?.token);
-              } else {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请先登录'), behavior: SnackBarBehavior.floating));
-              }
-            }
-          },
-          icon: const Icon(Icons.more_vert, color: AppColors.textMain),
-          itemBuilder: (context) => [
-            const PopupMenuItem(value: 'sync', child: Row(children: [Icon(Icons.cloud_sync_outlined, size: 20), SizedBox(width: 12), Text('云端同步')])),
-          ],
-        ),
-        const SizedBox(width: 8),
-      ] : null,
+      // 这里的 actions 已被移除，删除了“更多”菜单和“云端同步”按钮
     );
   }
 
   Widget _buildSearchBox() {
+    final scheduleService = context.watch<ScheduleService>();
     return GestureDetector(
       onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const SearchPage())),
       child: Container(
         height: 40,
         decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
-        child: const Row(children: [SizedBox(width: 12), Icon(Icons.search, size: 20, color: AppColors.textGrey), SizedBox(width: 8), Text('搜索日程、小组或邀请码', style: TextStyle(fontSize: 14, color: AppColors.textGrey))]),
+        child: Row(
+          children: [
+            const SizedBox(width: 12),
+            const Icon(Icons.search, size: 20, color: AppColors.textGrey),
+            const SizedBox(width: 8),
+            const Expanded(child: Text('搜索日程、小组或邀请码', style: TextStyle(fontSize: 14, color: AppColors.textGrey), overflow: TextOverflow.ellipsis)),
+            _buildSyncIndicator(scheduleService.syncStatus),
+            const SizedBox(width: 8),
+          ],
+        ),
       ),
     );
+  }
+
+  Widget _buildSyncIndicator(SyncStatus status) {
+    switch (status) {
+      case SyncStatus.syncing:
+        return const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary)));
+      case SyncStatus.success:
+        return const Icon(Icons.cloud_done, size: 16, color: Colors.green);
+      case SyncStatus.error:
+        return const Icon(Icons.cloud_off, size: 16, color: Colors.red);
+      default:
+        return const SizedBox.shrink();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final scheduleService = context.watch<ScheduleService>();
-
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: _buildAppBar(),
       body: Stack(
         children: [
           IndexedStack(index: _selectedIndex, children: _pages),
-          if (scheduleService.isProcessing)
-            Positioned(
-              left: 16,
-              right: 16,
-              top: 8, // 置顶显示在搜索框下方
-              child: _buildProcessingBar(scheduleService),
-            ),
+          if (scheduleService.isProcessing) Positioned(left: 16, right: 16, top: 8, child: _buildProcessingBar(scheduleService)),
         ],
       ),
       floatingActionButton: _selectedIndex == 0 ? FloatingActionButton(

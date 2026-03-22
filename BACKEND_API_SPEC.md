@@ -1,78 +1,62 @@
-# 讯极日历 - 后端 API 接口文档 (v2.5)
+# 讯极日历 - 后端 API 接口文档 (v3.4)
 
 ## 1. 项目概述
-*   **项目名称**：讯极日历 (Synji Calendar)
-*   **架构**：本地优先 (Local-First)，云端作为镜像备份与 AI 代理，并提供小组协作共享功能。
-*   **认证方式**：基于 JWT (JSON Web Token) 的 `Bearer Token` 认证
+*   **同步核心**：采用增量同步机制。
+*   **个人日程**：允许离线操作，通过 `delta-sync` 后台合并。
+*   **小组日程**：要求强一致性，操作需即时同步云端。
 
 ---
 
-## 2. 基础规范
-*   **Base URL**: `http://localhost:8080/v1` (开发环境) / `http://47.99.102.191:8080/v1` (测试环境)
-*   **公共 Header**:
-    *   `Content-Type: application/json`
-    *   `Authorization: Bearer {token}` (所有受保护接口均需携带)
+## 2. 核心数据模型 (Schedule)
 
----
-
-## 3. 数据模型定义 (Data Models)
-
-### 3.1 Schedule (日程对象)
-| 字段名 | 类型 | 说明 |
-| :--- | :--- | :--- |
-| `id` | String | 唯一标识 (建议客户端生成 UUID) |
-| `title` | String | 标题 (必填) |
-| `description` | String | 详细描述 (可选) |
-| `dateTime` | String | 时间 (ISO8601 格式，如: `2024-05-20T14:00:00Z`) |
-| `location` | String | 地点 (可选) |
-| `groupId` | String | 小组ID (个人日程为 null，小组日程必填) |
-| `creatorName` | String | 创建者昵称 |
-
-### 3.2 Group (小组对象)
 | 字段名 | 类型 | 说明 |
 | :--- | :--- | :--- |
 | `id` | String | 唯一标识 |
-| `name` | String | 小组名称 |
-| `creatorId` | String | 创建者用户 ID |
-| `inviteCode` | String | 邀请码 |
-| `memberCount` | int | **(新增)** 成员总数。用于列表展示，避免拉取完整 ID 列表。 |
-| `adminIds` | List<String> | 管理员 ID 列表 |
-| `createdAt` | String | 创建时间 |
+| `updatedAt` | DateTime | ISO8601 UTC 时间戳。用于 LWW (Last Write Wins) 冲突比对。 |
+| `isDeleted` | Integer | **1 为已删除，0 为活跃**。后端必须严格映射此字段。 |
+| `groupId` | String | 小组 ID。为空表示个人日程。 |
 
 ---
 
-## 4. 日程管理与同步 (Schedule & Sync)
+## 3. 增量同步接口
 
-### 4.1 个人日程镜像同步 (Upsert)
-*   **接口地址**：`/schedules/sync`
-*   **请求方法**：`POST`
-*   **请求体**：`List<Schedule>`
-*   **逻辑**：后端接收列表，根据 `id` 更新或插入。仅限 `groupId` 为空的记录。
+### 3.1 增量推送 (Upsert) - `POST /schedules/delta-sync`
+*   **功能**：同步本地变动。删除日程时，发送 `isDeleted: 1`。
+*   **权限校验 (重要)**：
+    1. **小组日程删除**：如果请求中 `isDeleted: 1` 且 `groupId` 不为空，后端**必须**校验当前用户是否为该小组的 **创建者 (Creator)** 或 **管理员 (Admin)**。
+    2. **非法操作反馈**：若普通成员尝试删除小组日程，后端**严禁静默忽略**，必须返回 **403 Forbidden**。
 
----
-
-## 5. 小组日程同步 (Group Sync)
-
-### 5.1 获取小组日程列表
-*   **接口地址**：`/groups/{groupId}/schedules`
-*   **请求方法**：`GET`
-*   **返回要求**：必须按照 `dateTime` **从早到晚**升序排列。
-
-### 5.2 发布/更新小组日程
-*   **接口地址**：`/groups/{groupId}/schedules`
-*   **请求方法**：`POST`
-*   **权限**：仅限该小组的**创建者**或**管理员**。
+### 3.2 增量拉取 (Fetch) - `GET /schedules/delta-fetch`
+*   **功能**：获取自 `since` 以来的变动。
+*   **返回要求 (关键)**：
+    1. **必须包含已删除记录**：返回的数据集中，必须包含 `is_deleted = 1` 的记录。
+    2. **否则后果**：如果后端不返回已删除记录，其他成员的手机端将永远无法获知该日程已被删除，导致数据在多端“复活”。
 
 ---
 
-## 6. 小组管理 (Group Management)
+## 4. 小组专属接口 (Direct Access)
 
-### 6.1 获取我的小组列表
-*   **接口地址**：`/groups`
-*   **请求方法**：`GET`
-*   **返回数据要求**：必须包含 `memberCount` 字段，且 `creatorId` 需准确，以便前端区分“我创建的”和“我加入的”。
+### 4.1 获取小组日程 - `GET /groups/{groupId}/schedules`
+*   **返回要求**：返回该小组下所有 `is_deleted = 0` 的记录。
 
 ---
 
-## 7. AI 智能解析 (AI Proxy)
-*(保持 v2.2 内容不变)*
+## 5. 【必读】后端 Hibernate/JPA 实现避坑指南
+
+### 5.1 JSON 字段映射 (Naming Strategy)
+*   前端发送键名：`isDeleted` (驼峰)。
+*   后端数据库名：`is_deleted` (下划线)。
+*   **技术要求**：请确保 Jackson 能够正确识别映射。建议在 DTO 字段上显式标注：
+    `@JsonProperty("isDeleted") private Integer isDeleted;`
+*   **排查**：如果后端收到的 `isDeleted` 为 `null`，逻辑将不会执行更新，请检查此处。
+
+### 5.2 LWW 冲突比对
+*   **逻辑**：`if (request.updatedAt >= database.updatedAt) { update(); }`
+*   **时区**：强制统一使用 **UTC** 时间进行字符串或长整型比对。
+
+### 5.3 物理删除禁令
+*   后端数据库**严禁直接物理删除 (DELETE)** 记录。
+*   必须使用逻辑删除 (`is_deleted = 1`)，否则 `delta-fetch` 接口将无法为其他客户端下发删除指令。
+
+### 5.4 事务性保证
+*   同步接口涉及多条记录，请务必开启 `@Transactional`。若权限校验失败，应触发回滚并返回错误响应。

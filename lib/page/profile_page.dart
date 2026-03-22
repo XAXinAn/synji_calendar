@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:synji_calendar/utils/app_constants.dart';
 import '../services/auth_service.dart';
+import '../services/schedule_service.dart'; // 引入 ScheduleService
 import 'login_page.dart';
 import 'membership_page.dart';
-import 'cloud_management_page.dart';
 import 'edit_profile_page.dart';
 import 'privacy_policy_page.dart';
 
@@ -26,7 +26,6 @@ class ProfilePage extends StatelessWidget {
             children: [
               SizedBox(height: statusBarHeight + 20),
               
-              // 1. 个人信息卡片
               if (authService.isAuthenticated)
                 _HeaderCard(
                   name: user?.nickname ?? '已登录用户',
@@ -42,7 +41,6 @@ class ProfilePage extends StatelessWidget {
               
               const SizedBox(height: 16),
               
-              // 2. 会员权益卡片
               _buildSectionCard([
                 _MenuItem(
                   icon: Icons.auto_awesome,
@@ -60,26 +58,6 @@ class ProfilePage extends StatelessWidget {
               
               const SizedBox(height: 16),
 
-              // 3. 云端管理卡片 (仅登录后显示)
-              if (authService.isAuthenticated) ...[
-                _buildSectionCard([
-                  _MenuItem(
-                    icon: Icons.cloud_queue_outlined,
-                    title: '管理云端数据',
-                    subtitle: '查看并按需删除云端备份记录',
-                    iconColor: AppColors.primary,
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (context) => const CloudManagementPage()),
-                      );
-                    },
-                  ),
-                ]),
-                const SizedBox(height: 16),
-              ],
-              
-              // 4. 设置与协议
               _buildSectionCard([
                 _MenuItem(
                   icon: Icons.security_outlined,
@@ -106,7 +84,6 @@ class ProfilePage extends StatelessWidget {
 
               const SizedBox(height: 16),
 
-              // 5. 账号操作
               if (authService.isAuthenticated)
                 _buildSectionCard([
                   _MenuItem(
@@ -166,18 +143,28 @@ class ProfilePage extends StatelessWidget {
   void _showLogoutConfirm(BuildContext context) {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('提示'),
         content: const Text('确定要退出登录吗？'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: const Text('取消', style: TextStyle(color: AppColors.textGrey)),
           ),
           TextButton(
-            onPressed: () {
-              context.read<AuthService>().logout();
-              Navigator.pop(context);
+            onPressed: () async {
+              Navigator.pop(dialogContext);
+              // 【核心修复】：退出登录时，必须同时通知两个 Service 清理数据
+              // 1. 清理日程 Service 的内存缓存和数据库
+              await context.read<ScheduleService>().clearLocalData();
+              // 2. 处理 AuthService 的账号退出逻辑
+              await context.read<AuthService>().logout();
+              
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('已退出登录并清除本地缓存'), behavior: SnackBarBehavior.floating),
+                );
+              }
             },
             child: const Text('确定', style: TextStyle(color: Colors.redAccent)),
           ),
@@ -189,18 +176,20 @@ class ProfilePage extends StatelessWidget {
   void _showDeleteAccountConfirm(BuildContext context) {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('注销账号', style: TextStyle(color: Colors.red)),
         content: const Text('注销账号将永久删除您的所有数据且无法恢复。确定要注销吗？'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: const Text('取消', style: TextStyle(color: AppColors.textGrey)),
           ),
           TextButton(
             onPressed: () async {
-              Navigator.pop(context);
+              Navigator.pop(dialogContext);
               try {
+                // 注销账号同样需要双重清理
+                await context.read<ScheduleService>().clearLocalData();
                 final success = await context.read<AuthService>().deleteAccount();
                 if (success && context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -252,7 +241,7 @@ class _HeaderCard extends StatelessWidget {
                   const SizedBox(height: 8),
                   Row(
                     children: [
-                      Text('编辑资料', style: TextStyle(color: AppColors.textGrey.withOpacity(0.8), fontSize: 13)),
+                      Text('编辑个人资料', style: TextStyle(color: AppColors.textGrey.withOpacity(0.8), fontSize: 13)),
                       const Icon(Icons.chevron_right, size: 16, color: AppColors.textLightGrey),
                     ],
                   ),
@@ -289,7 +278,7 @@ class _LoginPromptCard extends StatelessWidget {
                 children: [
                   Text('点击登录', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: AppColors.textMain)),
                   SizedBox(height: 8),
-                  Text('登录后可同步数据并享受更多功能', style: TextStyle(color: AppColors.textGrey, fontSize: 13)),
+                  Text('登录后可解锁完整体验并保障数据安全', style: TextStyle(color: AppColors.textGrey, fontSize: 13)),
                 ],
               ),
             ),

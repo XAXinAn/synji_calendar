@@ -5,6 +5,7 @@ import 'package:table_calendar/table_calendar.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:intl/intl.dart';
 import '../services/schedule_service.dart';
+import '../services/auth_service.dart'; // 引入 AuthService
 import '../models/schedule.dart';
 import '../utils/app_constants.dart';
 import 'add_schedule_page.dart';
@@ -26,10 +27,38 @@ class _HomePageState extends State<HomePage> {
     super.initState();
     initializeDateFormatting('zh_CN', null);
     _selectedDay = _focusedDay;
-    // 初始化时同步选中日期给 Service
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<ScheduleService>().setSelectedDate(_selectedDay!);
     });
+  }
+
+  // 统一的删除处理函数
+  void _handleDelete(BuildContext context, Schedule schedule) async {
+    final scheduleService = context.read<ScheduleService>();
+    final authService = context.read<AuthService>();
+    final token = authService.user?.token;
+
+    try {
+      // 【核心修复】：传出 token，并等待结果
+      await scheduleService.removeSchedule(schedule.id, token: token);
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('日程已删除'), behavior: SnackBarBehavior.floating),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        // 如果是小组日程删除失败（如无权限），这里会捕获并提示
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('删除失败: ${e.toString().replaceAll('Exception:', '')}'),
+            backgroundColor: AppColors.error,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -49,25 +78,12 @@ class _HomePageState extends State<HomePage> {
                 Container(
                   width: 4,
                   height: 16,
-                  decoration: BoxDecoration(
-                    color: AppColors.primary,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
+                  decoration: BoxDecoration(color: AppColors.primary, borderRadius: BorderRadius.circular(2)),
                 ),
                 const SizedBox(width: 8),
-                const Text(
-                  '今日日程',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.textMain,
-                  ),
-                ),
+                const Text('今日日程', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textMain)),
                 const Spacer(),
-                Text(
-                  '${dailySchedules.length} 个任务',
-                  style: const TextStyle(fontSize: 12, color: AppColors.textGrey),
-                ),
+                Text('${dailySchedules.length} 个任务', style: const TextStyle(fontSize: 12, color: AppColors.textGrey)),
               ],
             ),
           ),
@@ -93,13 +109,7 @@ class _HomePageState extends State<HomePage> {
       decoration: BoxDecoration(
         color: AppColors.cardBackground,
         borderRadius: BorderRadius.circular(AppSpacings.cardRadius),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.03),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8, offset: const Offset(0, 2))],
       ),
       child: TableCalendar(
         locale: 'zh_CN',
@@ -109,11 +119,7 @@ class _HomePageState extends State<HomePage> {
         selectedDayPredicate: (day) => isSameDay(_selectedDay, day),
         calendarFormat: _calendarFormat,
         rowHeight: 48,
-        onFormatChanged: (format) {
-          setState(() {
-            _calendarFormat = format;
-          });
-        },
+        onFormatChanged: (format) => setState(() => _calendarFormat = format),
         onDaySelected: (selectedDay, focusedDay) {
           setState(() {
             _selectedDay = selectedDay;
@@ -121,41 +127,25 @@ class _HomePageState extends State<HomePage> {
           });
           context.read<ScheduleService>().setSelectedDate(selectedDay);
         },
-        onPageChanged: (focusedDay) {
-          _focusedDay = focusedDay;
-        },
+        onPageChanged: (focusedDay) => _focusedDay = focusedDay,
         startingDayOfWeek: StartingDayOfWeek.monday,
         headerStyle: const HeaderStyle(
           formatButtonVisible: true,
           formatButtonShowsNext: false,
           titleCentered: true,
           titleTextStyle: TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: AppColors.textMain),
-          formatButtonDecoration: BoxDecoration(
-            color: AppColors.primary,
-            borderRadius: BorderRadius.all(Radius.circular(12.0)),
-          ),
+          formatButtonDecoration: BoxDecoration(color: AppColors.primary, borderRadius: BorderRadius.all(Radius.circular(12.0))),
           formatButtonTextStyle: TextStyle(color: Colors.white, fontSize: 12),
           formatButtonPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         ),
         calendarStyle: CalendarStyle(
-          todayDecoration: BoxDecoration(
-            color: AppColors.primary.withOpacity(0.2),
-            shape: BoxShape.circle,
-          ),
+          todayDecoration: BoxDecoration(color: AppColors.primary.withOpacity(0.2), shape: BoxShape.circle),
           todayTextStyle: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold),
-          selectedDecoration: const BoxDecoration(
-            color: AppColors.primary,
-            shape: BoxShape.circle,
-          ),
+          selectedDecoration: const BoxDecoration(color: AppColors.primary, shape: BoxShape.circle),
           markersMaxCount: 1,
-          markerDecoration: const BoxDecoration(
-            color: AppColors.primary,
-            shape: BoxShape.circle,
-          ),
+          markerDecoration: const BoxDecoration(color: AppColors.primary, shape: BoxShape.circle),
         ),
-        eventLoader: (day) {
-          return service.getSchedulesForDay(day);
-        },
+        eventLoader: (day) => service.getSchedulesForDay(day),
       ),
     );
   }
@@ -170,12 +160,7 @@ class _HomePageState extends State<HomePage> {
           extentRatio: 0.25,
           children: [
             SlidableAction(
-              onPressed: (context) {
-                context.read<ScheduleService>().removeSchedule(schedule.id);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('日程已删除')),
-                );
-              },
+              onPressed: (context) => _handleDelete(context, schedule), // 调用处理函数
               backgroundColor: AppColors.error,
               foregroundColor: Colors.white,
               icon: Icons.delete,
@@ -185,40 +170,20 @@ class _HomePageState extends State<HomePage> {
           ],
         ),
         child: GestureDetector(
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => AddSchedulePage(schedule: schedule),
-              ),
-            );
-          },
+          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => AddSchedulePage(schedule: schedule))),
           child: Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: AppColors.cardBackground,
               borderRadius: BorderRadius.circular(12),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.02),
-                  blurRadius: 4,
-                  offset: const Offset(0, 2),
-                ),
-              ],
+              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 4, offset: const Offset(0, 2))],
             ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Column(
                   children: [
-                    Text(
-                      DateFormat('HH:mm').format(schedule.dateTime),
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.textMain,
-                      ),
-                    ),
+                    Text(DateFormat('HH:mm').format(schedule.dateTime), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textMain)),
                     const SizedBox(height: 4),
                     const Icon(Icons.circle, size: 8, color: AppColors.primary),
                   ],
@@ -228,24 +193,20 @@ class _HomePageState extends State<HomePage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        schedule.title,
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textMain,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                      Row(
+                        children: [
+                          Expanded(child: Text(schedule.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.textMain), maxLines: 1, overflow: TextOverflow.ellipsis)),
+                          if (schedule.groupId != null)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
+                              child: const Text('小组', style: TextStyle(fontSize: 10, color: AppColors.primary)),
+                            ),
+                        ],
                       ),
                       if (schedule.description != null && schedule.description!.isNotEmpty) ...[
                         const SizedBox(height: 4),
-                        Text(
-                          schedule.description!,
-                          style: const TextStyle(fontSize: 13, color: AppColors.textGrey),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                        Text(schedule.description!, style: const TextStyle(fontSize: 13, color: AppColors.textGrey), maxLines: 2, overflow: TextOverflow.ellipsis),
                       ],
                       if (schedule.location != null && schedule.location!.isNotEmpty) ...[
                         const SizedBox(height: 8),
@@ -253,14 +214,7 @@ class _HomePageState extends State<HomePage> {
                           children: [
                             const Icon(Icons.location_on_rounded, size: 14, color: Colors.redAccent),
                             const SizedBox(width: 4),
-                            Expanded(
-                              child: Text(
-                                schedule.location!,
-                                style: const TextStyle(fontSize: 12, color: AppColors.textGrey),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
+                            Expanded(child: Text(schedule.location!, style: const TextStyle(fontSize: 12, color: AppColors.textGrey), maxLines: 1, overflow: TextOverflow.ellipsis)),
                           ],
                         ),
                       ],
@@ -283,10 +237,7 @@ class _HomePageState extends State<HomePage> {
           children: [
             Icon(Icons.event_note_rounded, size: 64, color: AppColors.textLightGrey.withOpacity(0.5)),
             const SizedBox(height: 16),
-            const Text(
-              '暂无日程安排',
-              style: TextStyle(color: AppColors.textGrey, fontSize: 15),
-            ),
+            const Text('暂无日程安排', style: TextStyle(color: AppColors.textGrey, fontSize: 15)),
           ],
         ),
       ),

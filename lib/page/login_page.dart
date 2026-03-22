@@ -2,6 +2,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/auth_service.dart';
+import '../services/schedule_service.dart'; // 引入 ScheduleService
 import '../utils/app_constants.dart';
 import 'register_page.dart';
 import 'privacy_policy_page.dart';
@@ -44,12 +45,19 @@ class _LoginPageState extends State<LoginPage> {
 
     if (_formKey.currentState!.validate()) {
       final authService = context.read<AuthService>();
+      final scheduleService = context.read<ScheduleService>(); // 获取 ScheduleService
+
       try {
         final success = await authService.login(
           _usernameController.text.trim(),
           _passwordController.text,
         );
+        
         if (success && mounted) {
+          // 【关键】登录成功后立即触发全量同步
+          // 此时 authService.user 已经包含 token
+          scheduleService.syncWithCloud(authService.user?.token, silent: false);
+          
           Navigator.of(context).pop();
         }
       } catch (e) {

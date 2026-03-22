@@ -20,13 +20,16 @@ class DatabaseHelper {
     String path = join(await getDatabasesPath(), 'calendar.db');
     return await openDatabase(
       path,
-      version: 2, // 升级版本到 2 以触发字段迁移
+      version: 3,
       onCreate: _onCreate,
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
-          // 为旧版本数据库添加缺失的字段
           await db.execute('ALTER TABLE schedules ADD COLUMN groupId TEXT');
           await db.execute('ALTER TABLE schedules ADD COLUMN creatorName TEXT');
+        }
+        if (oldVersion < 3) {
+          await db.execute('ALTER TABLE schedules ADD COLUMN updatedAt TEXT');
+          await db.execute('ALTER TABLE schedules ADD COLUMN isDeleted INTEGER DEFAULT 0');
         }
       },
     );
@@ -40,46 +43,73 @@ class DatabaseHelper {
         description TEXT,
         dateTime TEXT NOT NULL,
         location TEXT,
-        groupId TEXT,      -- 新增字段
-        creatorName TEXT   -- 新增字段
+        groupId TEXT,
+        creatorName TEXT,
+        updatedAt TEXT,
+        isDeleted INTEGER DEFAULT 0
       )
     ''');
   }
 
+  // 1. 插入或更新
   Future<int> insertSchedule(Schedule schedule) async {
     Database db = await database;
     return await db.insert('schedules', schedule.toMap(),
         conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
-  Future<List<Schedule>> getSchedules() async {
+  // 2. 获取所有活跃日程 - 【核心修复】：增加强制过滤
+  Future<List<Schedule>> getActiveSchedules() async {
     Database db = await database;
-    final List<Map<String, dynamic>> maps = await db.query('schedules');
-    return List.generate(maps.length, (i) {
-      return Schedule.fromMap(maps[i]);
-    });
+    final List<Map<String, dynamic>> maps = await db.query(
+      'schedules',
+      where: 'isDeleted = 0 OR isDeleted IS NULL',
+    );
+    return List.generate(maps.length, (i) => Schedule.fromMap(maps[i]));
   }
 
-  Future<int> updateSchedule(Schedule schedule) async {
+  // 3. 物理删除
+  Future<int> physicalDelete(String id) async {
+    Database db = await database;
+    return await db.delete('schedules', where: 'id = ?', whereArgs: [id]);
+  }
+
+  // 4. 获取特定小组的日程 - 【核心修复】：必须过滤已删除记录
+  Future<List<Schedule>> getSchedulesByGroupId(String groupId) async {
+    Database db = await database;
+    final List<Map<String, dynamic>> maps = await db.query(
+      'schedules',
+      where: 'groupId = ? AND (isDeleted = 0 OR isDeleted IS NULL)',
+      whereArgs: [groupId],
+    );
+    return maps.map((e) => Schedule.fromMap(e)).toList();
+  }
+
+  // 5. 获取脏数据用于同步
+  Future<List<Schedule>> getDirtySchedules(DateTime lastSyncTime) async {
+    Database db = await database;
+    final List<Map<String, dynamic>> maps = await db.query(
+      'schedules',
+      where: 'updatedAt > ?',
+      whereArgs: [lastSyncTime.toUtc().toIso8601String()],
+    );
+    return maps.map((e) => Schedule.fromMap(e)).toList();
+  }
+
+  // 6. 逻辑删除标记
+  Future<int> markAsDeleted(String id) async {
     Database db = await database;
     return await db.update(
       'schedules',
-      schedule.toMap(),
-      where: 'id = ?',
-      whereArgs: [schedule.id],
-    );
-  }
-
-  Future<int> deleteSchedule(String id) async {
-    Database db = await database;
-    return await db.delete(
-      'schedules',
+      {
+        'isDeleted': 1,
+        'updatedAt': DateTime.now().toUtc().toIso8601String(),
+      },
       where: 'id = ?',
       whereArgs: [id],
     );
   }
 
-  // 新增：清空所有数据（用于同步云端数据时覆盖本地）
   Future<void> clearAllSchedules() async {
     Database db = await database;
     await db.delete('schedules');
