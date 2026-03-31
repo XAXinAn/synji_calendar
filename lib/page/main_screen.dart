@@ -58,7 +58,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     _connectivitySubscription = Connectivity().onConnectivityChanged.listen((List<ConnectivityResult> results) {
       bool isConnected = results.any((result) => result != ConnectivityResult.none);
       if (isConnected) {
-        debugPrint('🌐 网络已恢复，触发自动同步...');
         _autoSync();
       }
     });
@@ -87,7 +86,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  // --- 隐私政策、图片分享等逻辑保持不变 ---
   Future<void> _checkPrivacyPolicy() async {
     final prefs = await SharedPreferences.getInstance();
     final bool hasAgreed = prefs.getBool('privacy_policy_agreed') ?? false;
@@ -224,7 +222,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       title: _selectedIndex == 0 ? _buildSearchBox() : const Text('功能广场'),
       backgroundColor: AppColors.background,
       elevation: 0,
-      // 这里的 actions 已被移除，删除了“更多”菜单和“云端同步”按钮
     );
   }
 

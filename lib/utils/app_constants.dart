@@ -2,9 +2,7 @@ import 'package:flutter/material.dart';
 
 class AppConfig {
   // 后端服务地址
-  // static const String baseUrl = 'http://47.99.102.191:8080/v1';
-  // 本地调试地址 (如果需要切换，可以手动修改或通过环境变量控制)
-  static const String baseUrl = 'http://localhost:8080/v1';
+  static const String baseUrl = 'https://synjicalendar.xin/v1';
 }
 
 class AppColors {

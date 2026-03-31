@@ -119,7 +119,6 @@ class _FindPageState extends State<FindPage> {
   Widget _buildFeatureCard(BuildContext context, Map<String, dynamic> feature) {
     final Color themeColor = feature['color'] as Color;
     final String tag = feature['tag'];
-    final bool isAvailable = tag == '智能' || tag == '共享';
 
     return Container(
       decoration: BoxDecoration(
@@ -137,7 +136,7 @@ class _FindPageState extends State<FindPage> {
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(AppSpacings.cardRadius),
-          onTap: () {
+          onTap: () async {
             final authService = context.read<AuthService>();
             if (!authService.isAuthenticated) {
               _showLoginPrompt(context);
@@ -186,7 +185,7 @@ class _FindPageState extends State<FindPage> {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
-                          color: tag == '共享' 
+                          color: (tag == '共享')
                             ? AppColors.primary.withOpacity(0.1) 
                             : AppColors.textLightGrey.withOpacity(0.2),
                           borderRadius: BorderRadius.circular(4),
@@ -195,8 +194,8 @@ class _FindPageState extends State<FindPage> {
                           tag,
                           style: TextStyle(
                             fontSize: 10, 
-                            color: tag == '共享' ? AppColors.primary : AppColors.textGrey,
-                            fontWeight: tag == '共享' ? FontWeight.bold : FontWeight.normal,
+                            color: (tag == '共享') ? AppColors.primary : AppColors.textGrey,
+                            fontWeight: (tag == '共享') ? FontWeight.bold : FontWeight.normal,
                           ),
                         ),
                       ),
@@ -234,26 +233,15 @@ class _FindPageState extends State<FindPage> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('需要登录'),
-        content: const Text('智能探索功能需要登录后才能使用，是否立即前往登录？'),
+        content: const Text('此功能需要登录后才能使用，是否立即前往登录？'),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('再看看', style: TextStyle(color: AppColors.textGrey)),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('再看看')),
           ElevatedButton(
             onPressed: () {
               Navigator.pop(context);
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const LoginPage()),
-              );
+              Navigator.push(context, MaterialPageRoute(builder: (context) => const LoginPage()));
             },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
-              foregroundColor: Colors.white,
-              elevation: 0,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary, foregroundColor: Colors.white),
             child: const Text('去登录'),
           ),
         ],
@@ -265,34 +253,28 @@ class _FindPageState extends State<FindPage> {
     showModalBottomSheet(
       context: context,
       backgroundColor: AppColors.background,
-      elevation: 0,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (BuildContext bContext) {
         return SafeArea(
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Wrap(
-              children: <Widget>[
-                ListTile(
-                  leading: const Icon(Icons.camera_alt_rounded, color: AppColors.primary),
-                  title: const Text('拍摄照片', style: TextStyle(fontWeight: FontWeight.w500)),
-                  onTap: () {
-                    Navigator.pop(bContext);
-                    _pickImage(context, ImageSource.camera);
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.photo_library_rounded, color: AppColors.primary),
-                  title: const Text('从相册选择', style: TextStyle(fontWeight: FontWeight.w500)),
-                  onTap: () {
-                    Navigator.pop(bContext);
-                    _pickImage(context, ImageSource.gallery);
-                  },
-                ),
-              ],
-            ),
+          child: Wrap(
+            children: <Widget>[
+              ListTile(
+                leading: const Icon(Icons.camera_alt_rounded, color: AppColors.primary),
+                title: const Text('拍摄照片'),
+                onTap: () {
+                  Navigator.pop(bContext);
+                  _pickImage(context, ImageSource.camera);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library_rounded, color: AppColors.primary),
+                title: const Text('从相册选择'),
+                onTap: () {
+                  Navigator.pop(bContext);
+                  _pickImage(context, ImageSource.gallery);
+                },
+              ),
+            ],
           ),
         );
       },
@@ -305,22 +287,14 @@ class _FindPageState extends State<FindPage> {
     final authService = context.read<AuthService>();
     
     try {
-      final XFile? image = await picker.pickImage(
-        source: source,
-        maxWidth: 1024,
-        maxHeight: 1024,
-        imageQuality: 85,
-      );
+      final XFile? image = await picker.pickImage(source: source, maxWidth: 1024, maxHeight: 1024, imageQuality: 85);
 
       if (image != null) {
         scheduleService.setProcessing(true, message: '正在从图片识别内容...', progress: 0.3);
         final String ocrResult = await _ocrService.processImage(image.path);
         scheduleService.setProcessing(true, message: 'AI 正在分析日程信息...', progress: 0.7);
 
-        final dynamic llmResult = await _llmService.sendToBot(
-          ocrResult, 
-          token: authService.user?.token
-        );
+        final dynamic llmResult = await _llmService.sendToBot(ocrResult, token: authService.user?.token);
 
         if (mounted) {
           scheduleService.setProcessing(false);
@@ -329,9 +303,6 @@ class _FindPageState extends State<FindPage> {
             parsedSchedules = llmResult.map((data) => _mapToSchedule(data, 0)).toList();
           } else if (llmResult is Map<String, dynamic>) {
             parsedSchedules = [_mapToSchedule(llmResult, 0)];
-          } else {
-            _showResultDialog(context, llmResult.toString());
-            return;
           }
           Navigator.push(context, MaterialPageRoute(builder: (context) => OcrConfirmPage(initialSchedules: parsedSchedules)));
         }
@@ -339,7 +310,7 @@ class _FindPageState extends State<FindPage> {
     } catch (e) {
       if (mounted) {
         scheduleService.setProcessing(false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('处理出错: $e'), backgroundColor: AppColors.error, behavior: SnackBarBehavior.fixed));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('处理出错: $e'), backgroundColor: AppColors.error));
       }
     }
   }
@@ -353,19 +324,6 @@ class _FindPageState extends State<FindPage> {
       description: data['description'],
       dateTime: dateTime,
       location: data['location'],
-    );
-  }
-
-  void _showResultDialog(BuildContext context, String text) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('提示'),
-        content: SingleChildScrollView(child: Text(text)),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('确定')),
-        ],
-      ),
     );
   }
 }

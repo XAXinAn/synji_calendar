@@ -2,17 +2,19 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../utils/app_constants.dart';
+import '../utils/ui_utils.dart';
 import '../models/schedule.dart';
 import '../services/schedule_service.dart';
 import '../services/group_service.dart';
 import '../services/auth_service.dart';
+import '../services/device_calendar_service.dart';
 
 class AddSchedulePage extends StatefulWidget {
   final Schedule? schedule;
   final bool isFromOcr;
   final bool isReviewMode;
   final DateTime? initialDate;
-  final String? targetGroupId; // 新增：明确指定目标小组ID，为null则为个人
+  final String? targetGroupId;
 
   const AddSchedulePage({
     super.key, 
@@ -34,6 +36,7 @@ class _AddSchedulePageState extends State<AddSchedulePage> {
   late final TextEditingController _locationController;
   late DateTime _selectedDateTime;
   String? _selectedGroupId;
+  final DeviceCalendarService _deviceCalendarService = DeviceCalendarService();
 
   @override
   void initState() {
@@ -42,7 +45,6 @@ class _AddSchedulePageState extends State<AddSchedulePage> {
     _descController = TextEditingController(text: widget.schedule?.description ?? '');
     _locationController = TextEditingController(text: widget.schedule?.location ?? '');
     
-    // 优先级：传入的 targetGroupId > schedule自带的 groupId > null(个人)
     _selectedGroupId = widget.targetGroupId ?? widget.schedule?.groupId;
     
     if (widget.schedule != null) {
@@ -101,12 +103,149 @@ class _AddSchedulePageState extends State<AddSchedulePage> {
     }
   }
 
+  Future<void> _showSaveOptionsDialog(Schedule schedule) async {
+    bool saveToApp = true;
+    bool saveToSystem = false;
+
+    final result = await showDialog<Map<String, bool>>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+          title: const Text('选择保存位置', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildOptionCard(
+                title: '存入软件日程',
+                subtitle: '多端同步，支持小组共享',
+                icon: Icons.cloud_done_rounded,
+                selected: saveToApp,
+                onTap: () => setState(() => saveToApp = !saveToApp),
+              ),
+              const SizedBox(height: 12),
+              _buildOptionCard(
+                title: '存入系统日历',
+                subtitle: '在手机自带日历中查看',
+                icon: Icons.calendar_today_rounded,
+                selected: saveToSystem,
+                onTap: () => setState(() => saveToSystem = !saveToSystem),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('取消', style: TextStyle(color: AppColors.textGrey)),
+            ),
+            ElevatedButton(
+              onPressed: (!saveToApp && !saveToSystem) ? null : () => Navigator.pop(context, {'app': saveToApp, 'system': saveToSystem}),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              child: const Text('确定保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (result != null) {
+      await _executeSave(schedule, result['app']!, result['system']!);
+    }
+  }
+
+  Widget _buildOptionCard({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.primary.withOpacity(0.08) : Colors.grey[50],
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selected ? AppColors.primary : Colors.transparent,
+            width: 1.5,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: selected ? AppColors.primary : AppColors.textGrey, size: 28),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: TextStyle(fontWeight: FontWeight.bold, color: selected ? AppColors.primary : AppColors.textMain, fontSize: 15)),
+                  Text(subtitle, style: const TextStyle(fontSize: 12, color: AppColors.textGrey)),
+                ],
+              ),
+            ),
+            if (selected)
+              const Icon(Icons.check_circle, color: AppColors.primary, size: 20)
+            else
+              Icon(Icons.radio_button_unchecked, color: Colors.grey[300], size: 20),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _executeSave(Schedule schedule, bool toApp, bool toSystem) async {
+    final authService = context.read<AuthService>();
+    final scheduleService = context.read<ScheduleService>();
+    final user = authService.user;
+
+    scheduleService.setProcessing(true, message: '正在处理...');
+    
+    try {
+      bool appSuccess = true;
+      bool systemSuccess = true;
+
+      if (toApp) {
+        if (widget.schedule == null || widget.isFromOcr) {
+          await scheduleService.addSchedule(schedule, token: user?.token);
+        } else {
+          await scheduleService.updateSchedule(schedule, token: user?.token);
+        }
+      }
+
+      if (toSystem) {
+        systemSuccess = await _deviceCalendarService.addToDeviceCalendar(schedule);
+      }
+
+      scheduleService.setProcessing(false);
+      if (!mounted) return;
+
+      if (appSuccess && systemSuccess) {
+        Navigator.pop(context);
+        String msg = toApp && toSystem ? '已保存至 App 并同步到系统日历' : (toApp ? '日程保存成功' : '已成功添加至系统日历');
+        UIUtils.showToast(context, msg);
+      } else if (!systemSuccess) {
+        UIUtils.showToast(context, 'App 保存成功，但系统日历写入失败（请检查权限）');
+      }
+    } catch (e) {
+      scheduleService.setProcessing(false);
+      if (!mounted) return;
+      UIUtils.showToast(context, '保存失败: $e');
+    }
+  }
+
   Future<void> _saveSchedule() async {
     if (!_canEdit()) return;
     if (_formKey.currentState!.validate()) {
       final authService = context.read<AuthService>();
       final user = authService.user;
-      final scheduleService = context.read<ScheduleService>();
 
       final schedule = Schedule(
         id: widget.schedule?.id ?? DateTime.now().millisecondsSinceEpoch.toString(),
@@ -121,26 +260,7 @@ class _AddSchedulePageState extends State<AddSchedulePage> {
       if (widget.isReviewMode) {
         Navigator.pop(context, schedule);
       } else {
-        try {
-          if (widget.schedule == null || widget.isFromOcr) {
-            await scheduleService.addSchedule(schedule, token: user?.token);
-          } else {
-            await scheduleService.updateSchedule(schedule, token: user?.token);
-          }
-          if (!mounted) return;
-          Navigator.pop(context);
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text((widget.schedule == null || widget.isFromOcr) ? '日程保存成功' : '日程更新成功')),
-          );
-        } catch (e) {
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('保存失败: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
+        await _showSaveOptionsDialog(schedule);
       }
     }
   }
@@ -241,9 +361,7 @@ class _AddSchedulePageState extends State<AddSchedulePage> {
                       final token = context.read<AuthService>().user?.token;
                       context.read<ScheduleService>().removeSchedule(widget.schedule!.id, token: token);
                       Navigator.pop(context);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('日程已删除')),
-                      );
+                      UIUtils.showToast(context, '日程已删除');
                     },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.error,
@@ -257,15 +375,6 @@ class _AddSchedulePageState extends State<AddSchedulePage> {
                       '删除日程',
                       style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                     ),
-                  ),
-                ),
-              ],
-              if (isEditing && !canEdit) ...[
-                const SizedBox(height: 32),
-                const Center(
-                  child: Text(
-                    '仅限小组管理员或创建者修改',
-                    style: TextStyle(color: AppColors.error, fontSize: 14),
                   ),
                 ),
               ],
