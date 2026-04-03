@@ -30,10 +30,8 @@ dependencies:
   receive_sharing_intent: ^1.6.1
   lpinyin: ^2.0.3
   connectivity_plus: ^6.1.1
-  device_calendar: ^4.3.2 # 新增：访问系统日历
-  permission_handler: ^11.3.1 # 新增：权限管理
-  flutter_overlay_window: ^0.5.0 # 系统级悬浮窗
-  screenshot: ^3.0.0 # 新增：截屏功能
+  device_calendar: ^4.3.2 # 访问系统日历
+  permission_handler: ^11.3.1 # 权限管理
 
 dev_dependencies:
   flutter_test:
