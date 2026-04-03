@@ -6,9 +6,14 @@ import 'package:synji_calendar/services/schedule_service.dart';
 import 'package:synji_calendar/services/auth_service.dart';
 import 'package:synji_calendar/services/group_service.dart';
 import 'package:synji_calendar/utils/app_constants.dart';
+import 'package:timezone/data/latest.dart' as tz;
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // 初始化时区数据 (device_calendar 4.x 必需)
+  tz.initializeTimeZones();
+  
   runApp(
     MultiProvider(
       providers: [
