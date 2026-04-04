@@ -3,12 +3,14 @@ class User {
   final String username;
   final String nickname;
   final String token;
+  final String refreshToken;
 
   User({
     required this.id,
     required this.username,
     required this.nickname,
     required this.token,
+    required this.refreshToken,
   });
 
   factory User.fromJson(Map<String, dynamic> json) {
@@ -16,8 +18,8 @@ class User {
       id: (json['id'] ?? '').toString(),
       username: json['username'] ?? '',
       nickname: json['nickname'] ?? '',
-      // 兼容性处理：支持后端返回 token 或 accessToken
       token: json['token'] ?? json['accessToken'] ?? '',
+      refreshToken: json['refreshToken'] ?? '',
     );
   }
 
@@ -27,6 +29,7 @@ class User {
       'username': username,
       'nickname': nickname,
       'token': token,
+      'refreshToken': refreshToken,
     };
   }
 }

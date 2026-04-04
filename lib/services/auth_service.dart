@@ -8,10 +8,14 @@ import '../models/user.dart';
 import '../utils/app_constants.dart';
 
 class AuthService extends ChangeNotifier {
+  static const String _userPrefsKey = 'user_data';
+  static const String _refreshTokenPrefsKey = 'refresh_token';
+
   User? _user;
   bool _isLoading = false;
   late final Dio _dio;
   late final CookieJar _cookieJar;
+  Future<bool>? _refreshFuture;
 
   User? get user => _user;
   bool get isLoading => _isLoading;
@@ -25,7 +29,7 @@ class AuthService extends ChangeNotifier {
 
   void _initDio() {
     _dio = Dio(BaseOptions(
-      baseUrl: AppConfig.baseUrl, 
+      baseUrl: AppConfig.baseUrl,
       connectTimeout: const Duration(seconds: 5),
       receiveTimeout: const Duration(seconds: 3),
       contentType: 'application/json',
@@ -33,25 +37,24 @@ class AuthService extends ChangeNotifier {
     _dio.interceptors.add(CookieManager(_cookieJar));
     _dio.interceptors.add(InterceptorsWrapper(
       onRequest: (options, handler) {
-        if (_user?.token != null && _user!.token.isNotEmpty) {
+        if (_user != null && _user!.token.isNotEmpty) {
           options.headers['Authorization'] = 'Bearer ${_user!.token}';
         }
-        return handler.next(options);
+        handler.next(options);
       },
-      onError: (DioException e, handler) async {
-        if (e.response?.statusCode == 401 && _user != null) {
-          try {
-            final success = await _refreshToken();
-            if (success) {
-              final opts = e.requestOptions;
-              opts.headers['Authorization'] = 'Bearer ${_user!.token}';
-              final response = await _dio.fetch(opts);
-              return handler.resolve(response);
-            }
-          } catch (refreshError) {}
-          logout(); 
+      onError: (e, handler) async {
+        if (_shouldTryRefresh(e)) {
+          final refreshed = await _refreshToken();
+          if (refreshed && _user != null) {
+            final retryOptions = e.requestOptions;
+            retryOptions.headers['Authorization'] = 'Bearer ${_user!.token}';
+            retryOptions.extra['skipAuthRefresh'] = true;
+            final retryResponse = await _dio.fetch(retryOptions);
+            return handler.resolve(retryResponse);
+          }
+          await logout();
         }
-        return handler.next(e);
+        handler.next(e);
       },
     ));
   }
@@ -70,13 +73,12 @@ class AuthService extends ChangeNotifier {
           username: _user!.username,
           nickname: nickname,
           token: _user!.token,
+          refreshToken: _user!.refreshToken,
         );
         await _saveUserToPrefs();
         notifyListeners();
         return true;
       }
-    } on DioException catch (e) {
-      rethrow;
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -86,12 +88,24 @@ class AuthService extends ChangeNotifier {
 
   Future<void> _loadUser() async {
     final prefs = await SharedPreferences.getInstance();
-    final userJson = prefs.getString('user_data');
-    if (userJson != null) {
-      try {
-        _user = User.fromJson(jsonDecode(userJson));
-        notifyListeners();
-      } catch (e) {}
+    final userJson = prefs.getString(_userPrefsKey);
+    final savedRefreshToken = prefs.getString(_refreshTokenPrefsKey) ?? '';
+    if (userJson == null) return;
+
+    try {
+      final loaded = User.fromJson(jsonDecode(userJson));
+      _user = User(
+        id: loaded.id,
+        username: loaded.username,
+        nickname: loaded.nickname,
+        token: loaded.token,
+        refreshToken:
+            loaded.refreshToken.isNotEmpty ? loaded.refreshToken : savedRefreshToken,
+      );
+      notifyListeners();
+    } catch (_) {
+      await prefs.remove(_userPrefsKey);
+      await prefs.remove(_refreshTokenPrefsKey);
     }
   }
 
@@ -104,7 +118,17 @@ class AuthService extends ChangeNotifier {
         'password': password,
       });
       if (response.data['code'] == 200) {
-        _user = User.fromJson(response.data['data']);
+        final baseUser = User.fromJson(
+          Map<String, dynamic>.from(response.data['data'] ?? const {}),
+        );
+        final refreshToken = _extractRefreshTokenFromResponse(response) ?? '';
+        _user = User(
+          id: baseUser.id,
+          username: baseUser.username,
+          nickname: baseUser.nickname,
+          token: baseUser.token,
+          refreshToken: refreshToken,
+        );
         await _saveUserToPrefs();
         return true;
       } else {
@@ -128,7 +152,17 @@ class AuthService extends ChangeNotifier {
       });
       if (response.data['code'] == 200 || response.data['code'] == 201) {
         if (response.data['data'] != null && response.data['data']['token'] != null) {
-          _user = User.fromJson(response.data['data']);
+          final baseUser = User.fromJson(
+            Map<String, dynamic>.from(response.data['data'] ?? const {}),
+          );
+          final refreshToken = _extractRefreshTokenFromResponse(response) ?? '';
+          _user = User(
+            id: baseUser.id,
+            username: baseUser.username,
+            nickname: baseUser.nickname,
+            token: baseUser.token,
+            refreshToken: refreshToken,
+          );
           await _saveUserToPrefs();
         } else {
           return await login(username, password);
@@ -147,11 +181,21 @@ class AuthService extends ChangeNotifier {
 
   Future<void> logout() async {
     try {
-      if (_user != null) await _dio.post('/auth/logout');
-    } catch (e) {} finally {
+      if (_user != null) {
+        await _dio.post(
+          '/auth/logout',
+          options: Options(
+            headers: _buildRefreshTokenCookieHeader(_user!.refreshToken),
+            extra: {'skipAuthRefresh': true},
+          ),
+        );
+      }
+    } catch (_) {
+    } finally {
       _user = null;
       final prefs = await SharedPreferences.getInstance();
-      await prefs.remove('user_data');
+      await prefs.remove(_userPrefsKey);
+      await prefs.remove(_refreshTokenPrefsKey);
       await prefs.remove('last_sync_timestamp');
       _cookieJar.deleteAll();
       notifyListeners();
@@ -176,29 +220,83 @@ class AuthService extends ChangeNotifier {
   }
 
   Future<void> _saveUserToPrefs() async {
-    if (_user != null) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('user_data', jsonEncode(_user!.toJson()));
-    }
+    if (_user == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_userPrefsKey, jsonEncode(_user!.toJson()));
+    await prefs.setString(_refreshTokenPrefsKey, _user!.refreshToken);
   }
 
   Future<bool> _refreshToken() async {
+    if (_refreshFuture != null) return _refreshFuture!;
+    _refreshFuture = _performRefreshToken();
+    final result = await _refreshFuture!;
+    _refreshFuture = null;
+    return result;
+  }
+
+  Future<bool> _performRefreshToken() async {
+    if (_user == null || _user!.refreshToken.isEmpty) return false;
+
     try {
-      final response = await _dio.post('/auth/refresh');
+      final response = await _dio.post(
+        '/auth/refresh',
+        options: Options(
+          headers: _buildRefreshTokenCookieHeader(_user!.refreshToken),
+          extra: {'skipAuthRefresh': true},
+        ),
+      );
+
       if (response.data['code'] == 200) {
-        final newToken = response.data['data']['token'] ?? response.data['data']['accessToken'];
-        if (newToken != null) {
-          _user = User(
-            id: _user!.id,
-            username: _user!.username,
-            nickname: _user!.nickname,
-            token: newToken,
-          );
-          await _saveUserToPrefs();
-          return true;
+        final data = response.data['data'] ?? const {};
+        final newAccessToken = data['token'] ?? data['accessToken'];
+        if (newAccessToken is! String || newAccessToken.isEmpty) return false;
+
+        final rotatedRefreshToken =
+            _extractRefreshTokenFromResponse(response) ?? _user!.refreshToken;
+
+        _user = User(
+          id: _user!.id,
+          username: _user!.username,
+          nickname: _user!.nickname,
+          token: newAccessToken,
+          refreshToken: rotatedRefreshToken,
+        );
+        await _saveUserToPrefs();
+        notifyListeners();
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  bool _shouldTryRefresh(DioException e) {
+    if (e.response?.statusCode != 401 || _user == null) return false;
+    if (e.requestOptions.extra['skipAuthRefresh'] == true) return false;
+
+    final path = e.requestOptions.path;
+    return path != '/auth/login' &&
+        path != '/auth/register' &&
+        path != '/auth/refresh' &&
+        path != '/auth/logout';
+  }
+
+  Map<String, dynamic> _buildRefreshTokenCookieHeader(String refreshToken) {
+    if (refreshToken.isEmpty) return {};
+    return {'Cookie': 'refreshToken=${Uri.encodeComponent(refreshToken)}'};
+  }
+
+  String? _extractRefreshTokenFromResponse(Response response) {
+    final setCookieHeaders = response.headers.map['set-cookie'];
+    if (setCookieHeaders == null) return null;
+
+    for (final header in setCookieHeaders) {
+      for (final part in header.split(';')) {
+        final trimmed = part.trim();
+        if (trimmed.startsWith('refreshToken=')) {
+          return Uri.decodeComponent(trimmed.substring('refreshToken='.length));
         }
       }
-    } catch (e) {}
-    return false;
+    }
+    return null;
   }
 }
