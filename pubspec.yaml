@@ -32,6 +32,7 @@ dependencies:
   connectivity_plus: ^6.1.1
   device_calendar: ^4.3.2 # 访问系统日历
   permission_handler: ^11.3.1 # 权限管理
+  path_provider: ^2.1.5
 
 dev_dependencies:
   flutter_test:

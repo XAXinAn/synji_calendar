@@ -1,5 +1,9 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import '../utils/app_constants.dart';
 import '../utils/ocr_service.dart';
@@ -249,6 +253,53 @@ class _FindPageState extends State<FindPage> {
     );
   }
 
+  Future<bool> _ensureImagePermission(ImageSource source) async {
+    final Permission permission =
+        source == ImageSource.camera ? Permission.camera : Permission.photos;
+
+    final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+    PermissionStatus status = await permission.status;
+    if (status.isGranted || status.isLimited) return true;
+
+    status = await permission.request();
+    if (status.isGranted || status.isLimited) return true;
+
+    if (!mounted) return false;
+
+    final String msg = status.isPermanentlyDenied
+        ? '权限被永久拒绝，请到系统设置开启后重试'
+        : '未授予相机/相册权限，无法选择图片';
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        action: status.isPermanentlyDenied
+            ? SnackBarAction(
+                label: '去设置',
+                onPressed: openAppSettings,
+              )
+            : null,
+      ),
+    );
+    return false;
+  }
+
+  Future<String> _persistPickedImage(XFile file) async {
+    final Directory docsDir = await getApplicationDocumentsDirectory();
+    final Directory targetDir = Directory(p.join(docsDir.path, 'picked_images'));
+    if (!await targetDir.exists()) {
+      await targetDir.create(recursive: true);
+    }
+
+    final String ext = p.extension(file.path).isEmpty ? '.jpg' : p.extension(file.path);
+    final String stablePath = p.join(
+      targetDir.path,
+      'picked_${DateTime.now().millisecondsSinceEpoch}$ext',
+    );
+
+    await file.saveTo(stablePath);
+    return stablePath;
+  }
+
   void _showImagePickerOptions(BuildContext context) {
     showModalBottomSheet(
       context: context,
@@ -285,18 +336,22 @@ class _FindPageState extends State<FindPage> {
     final ImagePicker picker = ImagePicker();
     final scheduleService = context.read<ScheduleService>();
     final authService = context.read<AuthService>();
-    
+
+    final bool hasPermission = await _ensureImagePermission(source);
+    if (!hasPermission) return;
+
     try {
-      final XFile? image = await picker.pickImage(source: source, maxWidth: 1024, maxHeight: 1024, imageQuality: 85);
+      final XFile? image = await picker.pickImage(source: source);
 
       if (image != null) {
+        final String stablePath = await _persistPickedImage(image);
         scheduleService.setProcessing(true, message: '正在从图片识别内容...', progress: 0.3);
-        final String ocrResult = await _ocrService.processImage(image.path);
+        final String ocrResult = await _ocrService.processImage(stablePath);
         scheduleService.setProcessing(true, message: 'AI 正在分析日程信息...', progress: 0.7);
 
         final dynamic llmResult = await _llmService.sendToBot(ocrResult, token: authService.user?.token);
 
-        if (mounted) {
+        if (context.mounted) {
           scheduleService.setProcessing(false);
           List<Schedule> parsedSchedules = [];
           if (llmResult is List) {
@@ -308,7 +363,7 @@ class _FindPageState extends State<FindPage> {
         }
       }
     } catch (e) {
-      if (mounted) {
+      if (context.mounted) {
         scheduleService.setProcessing(false);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('处理出错: $e'), backgroundColor: AppColors.error));
       }
